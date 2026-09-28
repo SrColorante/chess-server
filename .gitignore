@@ -1,0 +1,4 @@
+bin/
+*.class
+repair_prompt.txt
+worker_prompt.txt
