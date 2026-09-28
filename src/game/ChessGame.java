@@ -3,13 +3,13 @@ package game;
 import java.util.Arrays;
 
 /**
- * ChessGame encapsulates a complete chess engine with board state,
- * move validation for all 6 pieces, turn management, and board rendering.
+ * ChessGame encapsulates board state, move validation, turn management, and board rendering.
  */
 public class ChessGame {
 
     public enum Color {
         WHITE, BLACK;
+
         public Color opposite() {
             return this == WHITE ? BLACK : WHITE;
         }
@@ -19,8 +19,14 @@ public class ChessGame {
         PAWN('P'), ROOK('R'), KNIGHT('N'), BISHOP('B'), QUEEN('Q'), KING('K');
 
         private final char symbol;
-        PieceType(char symbol) { this.symbol = symbol; }
-        public char getSymbol() { return symbol; }
+
+        PieceType(char symbol) {
+            this.symbol = symbol;
+        }
+
+        public char getSymbol() {
+            return symbol;
+        }
     }
 
     public static class Piece {
@@ -32,8 +38,13 @@ public class ChessGame {
             this.color = color;
         }
 
-        public PieceType getType() { return type; }
-        public Color getColor() { return color; }
+        public PieceType getType() {
+            return type;
+        }
+
+        public Color getColor() {
+            return color;
+        }
 
         @Override
         public String toString() {
@@ -51,11 +62,15 @@ public class ChessGame {
             this.message = message;
         }
 
-        public boolean isSuccess() { return success; }
-        public String getMessage() { return message; }
+        public boolean isSuccess() {
+            return success;
+        }
+
+        public String getMessage() {
+            return message;
+        }
     }
 
-    // 8x8 board: board[rank][file] where rank 0 is row 8 (Black), rank 7 is row 1 (White)
     private final Piece[][] board = new Piece[8][8];
     private Color currentTurn = Color.WHITE;
     private boolean gameOver = false;
@@ -67,12 +82,10 @@ public class ChessGame {
     }
 
     private void initBoard() {
-        // Clear board
         for (int r = 0; r < 8; r++) {
             Arrays.fill(board[r], null);
         }
 
-        // Black pieces (Rank 8 -> index 0, Rank 7 -> index 1)
         board[0][0] = new Piece(PieceType.ROOK, Color.BLACK);
         board[0][1] = new Piece(PieceType.KNIGHT, Color.BLACK);
         board[0][2] = new Piece(PieceType.BISHOP, Color.BLACK);
@@ -85,7 +98,6 @@ public class ChessGame {
             board[1][f] = new Piece(PieceType.PAWN, Color.BLACK);
         }
 
-        // White pieces (Rank 2 -> index 6, Rank 1 -> index 7)
         for (int f = 0; f < 8; f++) {
             board[6][f] = new Piece(PieceType.PAWN, Color.WHITE);
         }
@@ -104,10 +116,21 @@ public class ChessGame {
         endReason = "";
     }
 
-    public Color getCurrentTurn() { return currentTurn; }
-    public boolean isGameOver() { return gameOver; }
-    public Color getWinner() { return winner; }
-    public String getEndReason() { return endReason; }
+    public synchronized Color getCurrentTurn() {
+        return currentTurn;
+    }
+
+    public synchronized boolean isGameOver() {
+        return gameOver;
+    }
+
+    public synchronized Color getWinner() {
+        return winner;
+    }
+
+    public synchronized String getEndReason() {
+        return endReason;
+    }
 
     public synchronized void resign(Color playerColor) {
         if (!gameOver) {
@@ -117,9 +140,6 @@ public class ChessGame {
         }
     }
 
-    /**
-     * Executes move e.g. "e2" to "e4".
-     */
     public synchronized MoveResult makeMove(String fromStr, String toStr, Color playerColor) {
         if (gameOver) {
             return new MoveResult(false, "Game is already over: " + endReason);
@@ -136,6 +156,9 @@ public class ChessGame {
 
         int fromR = from[0], fromF = from[1];
         int toR = to[0], toF = to[1];
+        if (fromR == toR && fromF == toF) {
+            return new MoveResult(false, "Source and destination squares must differ");
+        }
 
         Piece piece = board[fromR][fromF];
         if (piece == null) {
@@ -149,73 +172,154 @@ public class ChessGame {
         if (target != null && target.getColor() == playerColor) {
             return new MoveResult(false, "Cannot capture your own piece at " + toStr);
         }
+        if (target != null && target.getType() == PieceType.KING) {
+            return new MoveResult(false, "King capture is not a legal move");
+        }
 
         if (!isValidPieceMove(piece, fromR, fromF, toR, toF, target)) {
             return new MoveResult(false, "Illegal move for " + piece.getType());
         }
 
-        // Execute move
-        board[toR][toF] = piece;
+        Piece moved = board[fromR][fromF];
+        Piece captured = board[toR][toF];
+        board[toR][toF] = moved;
         board[fromR][fromF] = null;
 
-        // Check if King was captured
-        if (target != null && target.getType() == PieceType.KING) {
-            gameOver = true;
-            winner = playerColor;
-            endReason = "King captured at " + toStr;
-            return new MoveResult(true, "Checkmate! " + playerColor + " wins! (" + endReason + ")");
+        if (wouldPromotePawn(moved, toR)) {
+            board[toR][toF] = new Piece(PieceType.QUEEN, moved.getColor());
         }
 
-        // Switch turn
-        currentTurn = currentTurn.opposite();
+        if (isInCheck(playerColor)) {
+            board[fromR][fromF] = moved;
+            board[toR][toF] = captured;
+            return new MoveResult(false, "Illegal move: your king would remain in check");
+        }
+
+        Color opponent = currentTurn.opposite();
+        boolean opponentInCheck = isInCheck(opponent);
+        boolean opponentHasLegalMove = hasAnyLegalMove(opponent);
+
+        if (!opponentHasLegalMove) {
+            gameOver = true;
+            if (opponentInCheck) {
+                winner = playerColor;
+                endReason = "Checkmate";
+                currentTurn = opponent;
+                return new MoveResult(true, "Checkmate! " + playerColor + " wins.");
+            }
+            winner = null;
+            endReason = "Stalemate";
+            currentTurn = opponent;
+            return new MoveResult(true, "Draw by stalemate.");
+        }
+
+        currentTurn = opponent;
+        if (opponentInCheck) {
+            return new MoveResult(true, "Move accepted: " + fromStr + " -> " + toStr + " (Check)");
+        }
         return new MoveResult(true, "Move accepted: " + fromStr + " -> " + toStr);
+    }
+
+    private boolean wouldPromotePawn(Piece piece, int toRank) {
+        if (piece.getType() != PieceType.PAWN) return false;
+        return (piece.getColor() == Color.WHITE && toRank == 0)
+                || (piece.getColor() == Color.BLACK && toRank == 7);
+    }
+
+    private boolean hasAnyLegalMove(Color color) {
+        for (int fromR = 0; fromR < 8; fromR++) {
+            for (int fromF = 0; fromF < 8; fromF++) {
+                Piece piece = board[fromR][fromF];
+                if (piece == null || piece.getColor() != color) continue;
+
+                for (int toR = 0; toR < 8; toR++) {
+                    for (int toF = 0; toF < 8; toF++) {
+                        if (fromR == toR && fromF == toF) continue;
+                        Piece target = board[toR][toF];
+                        if (target != null && target.getColor() == color) continue;
+                        if (target != null && target.getType() == PieceType.KING) continue;
+                        if (!isValidPieceMove(piece, fromR, fromF, toR, toF, target)) continue;
+
+                        Piece moved = board[fromR][fromF];
+                        Piece captured = board[toR][toF];
+                        board[toR][toF] = moved;
+                        board[fromR][fromF] = null;
+
+                        boolean legal = !isInCheck(color);
+
+                        board[fromR][fromF] = moved;
+                        board[toR][toF] = captured;
+
+                        if (legal) return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean isInCheck(Color color) {
+        int[] king = locateKing(color);
+        if (king == null) {
+            return true;
+        }
+
+        Color opponent = color.opposite();
+        for (int fromR = 0; fromR < 8; fromR++) {
+            for (int fromF = 0; fromF < 8; fromF++) {
+                Piece attacker = board[fromR][fromF];
+                if (attacker == null || attacker.getColor() != opponent) continue;
+                if (isValidAttackMove(attacker, fromR, fromF, king[0], king[1])) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private int[] locateKing(Color color) {
+        for (int r = 0; r < 8; r++) {
+            for (int f = 0; f < 8; f++) {
+                Piece p = board[r][f];
+                if (p != null && p.getColor() == color && p.getType() == PieceType.KING) {
+                    return new int[] {r, f};
+                }
+            }
+        }
+        return null;
     }
 
     private boolean isValidPieceMove(Piece piece, int fromR, int fromF, int toR, int toF, Piece target) {
         int dR = toR - fromR;
         int dF = toF - fromF;
 
+        if (dR == 0 && dF == 0) {
+            return false;
+        }
+
         switch (piece.getType()) {
             case PAWN:
                 int forward = piece.getColor() == Color.WHITE ? -1 : 1;
                 int startRank = piece.getColor() == Color.WHITE ? 6 : 1;
-
-                // Move forward 1 step
                 if (dF == 0 && dR == forward && target == null) {
                     return true;
                 }
-                // Initial move 2 steps
                 if (dF == 0 && fromR == startRank && dR == 2 * forward && target == null) {
-                    if (board[fromR + forward][fromF] == null) {
-                        return true;
-                    }
+                    return board[fromR + forward][fromF] == null;
                 }
-                // Capture diagonally
-                if (Math.abs(dF) == 1 && dR == forward && target != null) {
-                    return true;
-                }
-                return false;
+                return Math.abs(dF) == 1 && dR == forward && target != null;
 
             case KNIGHT:
                 return (Math.abs(dR) == 1 && Math.abs(dF) == 2) || (Math.abs(dR) == 2 && Math.abs(dF) == 1);
 
             case BISHOP:
-                if (Math.abs(dR) == Math.abs(dF)) {
-                    return isPathClear(fromR, fromF, toR, toF);
-                }
-                return false;
+                return Math.abs(dR) == Math.abs(dF) && isPathClear(fromR, fromF, toR, toF);
 
             case ROOK:
-                if (dR == 0 || dF == 0) {
-                    return isPathClear(fromR, fromF, toR, toF);
-                }
-                return false;
+                return (dR == 0 || dF == 0) && isPathClear(fromR, fromF, toR, toF);
 
             case QUEEN:
-                if (dR == 0 || dF == 0 || Math.abs(dR) == Math.abs(dF)) {
-                    return isPathClear(fromR, fromF, toR, toF);
-                }
-                return false;
+                return (dR == 0 || dF == 0 || Math.abs(dR) == Math.abs(dF)) && isPathClear(fromR, fromF, toR, toF);
 
             case KING:
                 return Math.abs(dR) <= 1 && Math.abs(dF) <= 1;
@@ -225,7 +329,35 @@ public class ChessGame {
         }
     }
 
+    private boolean isValidAttackMove(Piece piece, int fromR, int fromF, int toR, int toF) {
+        int dR = toR - fromR;
+        int dF = toF - fromF;
+        if (dR == 0 && dF == 0) return false;
+
+        switch (piece.getType()) {
+            case PAWN:
+                int forward = piece.getColor() == Color.WHITE ? -1 : 1;
+                return dR == forward && Math.abs(dF) == 1;
+            case KNIGHT:
+                return (Math.abs(dR) == 1 && Math.abs(dF) == 2) || (Math.abs(dR) == 2 && Math.abs(dF) == 1);
+            case BISHOP:
+                return Math.abs(dR) == Math.abs(dF) && isPathClear(fromR, fromF, toR, toF);
+            case ROOK:
+                return (dR == 0 || dF == 0) && isPathClear(fromR, fromF, toR, toF);
+            case QUEEN:
+                return (dR == 0 || dF == 0 || Math.abs(dR) == Math.abs(dF)) && isPathClear(fromR, fromF, toR, toF);
+            case KING:
+                return Math.abs(dR) <= 1 && Math.abs(dF) <= 1;
+            default:
+                return false;
+        }
+    }
+
     private boolean isPathClear(int fromR, int fromF, int toR, int toF) {
+        if (fromR == toR && fromF == toF) {
+            return false;
+        }
+
         int stepR = Integer.compare(toR, fromR);
         int stepF = Integer.compare(toF, fromF);
 
@@ -252,10 +384,10 @@ public class ChessGame {
 
         int file = fileChar - 'a';
         int rank = 8 - (rankChar - '0');
-        return new int[]{rank, file};
+        return new int[] {rank, file};
     }
 
-    public String renderBoard() {
+    public synchronized String renderBoard() {
         StringBuilder sb = new StringBuilder();
         sb.append("\n  +---+---+---+---+---+---+---+---+\n");
         for (int r = 0; r < 8; r++) {
@@ -269,7 +401,13 @@ public class ChessGame {
         sb.append("    a   b   c   d   e   f   g   h\n");
         sb.append("Current Turn: ").append(currentTurn);
         if (gameOver) {
-            sb.append(" [GAME OVER - Winner: ").append(winner).append(" (").append(endReason).append(")]");
+            sb.append(" [GAME OVER - ");
+            if (winner == null) {
+                sb.append("Draw");
+            } else {
+                sb.append("Winner: ").append(winner);
+            }
+            sb.append(" (").append(endReason).append(")]");
         }
         return sb.toString();
     }
