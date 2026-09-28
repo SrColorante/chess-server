@@ -1,7 +1,11 @@
 package server;
 
 import java.net.Socket;
-import java.util.*;
+import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -22,11 +26,11 @@ public class ServerRoomHandler {
         private final String code;
         private final boolean isPrivate;
         private final String hostUsername;
-        private Socket hostSocket;
-        private Socket guestSocket;
-        private String guestUsername;
-        private RoomStatus status;
-        private ConnectionHandler connectionHandler;
+        private final Socket hostSocket;
+        private volatile Socket guestSocket;
+        private volatile String guestUsername;
+        private volatile RoomStatus status;
+        private volatile ConnectionHandler connectionHandler;
 
         public Room(String id, String name, String code, boolean isPrivate, Socket hostSocket, String hostUsername) {
             this.id = id;
@@ -49,16 +53,36 @@ public class ServerRoomHandler {
         public RoomStatus getStatus() { return status; }
         public ConnectionHandler getConnectionHandler() { return connectionHandler; }
 
-        public void setGuest(Socket guestSocket, String guestUsername) {
-            this.guestSocket = guestSocket;
-            this.guestUsername = guestUsername;
-            this.status = RoomStatus.PLAYING;
+        public synchronized boolean trySetGuest(Socket socket, String username) {
+            if (status != RoomStatus.WAITING || guestSocket != null || socket == null || username == null) {
+                return false;
+            }
+            guestSocket = socket;
+            guestUsername = username;
+            status = RoomStatus.PLAYING;
+            return true;
         }
 
-        public void setStatus(RoomStatus status) { this.status = status; }
-        public void setConnectionHandler(ConnectionHandler handler) { this.connectionHandler = handler; }
+        public synchronized void rollbackGuestJoin() {
+            guestSocket = null;
+            guestUsername = null;
+            if (status != RoomStatus.FINISHED) {
+                status = RoomStatus.WAITING;
+            }
+        }
+
+        public synchronized void setStatus(RoomStatus status) {
+            this.status = status;
+        }
+
+        public void setConnectionHandler(ConnectionHandler handler) {
+            this.connectionHandler = handler;
+        }
     }
 
+    private static final String CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+    private final SecureRandom secureRandom = new SecureRandom();
     private final Map<String, Room> roomsById = new ConcurrentHashMap<>();
     private final Map<String, Room> roomsByCode = new ConcurrentHashMap<>();
 
@@ -73,9 +97,9 @@ public class ServerRoomHandler {
 
     public List<Room> getPublicRooms() {
         List<Room> result = new ArrayList<>();
-        for (Room r : roomsById.values()) {
-            if (!r.isPrivate() && r.getStatus() == RoomStatus.WAITING) {
-                result.add(r);
+        for (Room room : roomsById.values()) {
+            if (!room.isPrivate() && room.getStatus() == RoomStatus.WAITING) {
+                result.add(room);
             }
         }
         return result;
@@ -92,20 +116,19 @@ public class ServerRoomHandler {
     }
 
     public synchronized void removeRoom(String id) {
-        Room r = roomsById.remove(id);
-        if (r != null) {
-            roomsByCode.remove(r.getCode().toUpperCase());
+        Room room = roomsById.remove(id);
+        if (room != null) {
+            roomsByCode.remove(room.getCode().toUpperCase());
+            room.setStatus(RoomStatus.FINISHED);
         }
     }
 
     private String generateUniqueCode() {
-        String chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-        Random random = new Random();
         String code;
         do {
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < 6; i++) {
-                sb.append(chars.charAt(random.nextInt(chars.length())));
+                sb.append(CODE_CHARS.charAt(secureRandom.nextInt(CODE_CHARS.length())));
             }
             code = sb.toString();
         } while (roomsByCode.containsKey(code));

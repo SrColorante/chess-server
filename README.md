@@ -1,87 +1,61 @@
 # chess-server
 
-Multiplayer chess game server and client written in Java, built with a Dual-Tier Orchestration architecture (Gemini CLI as Architect + GitHub Copilot as Worker).
+Multiplayer chess server/client in Java.
 
-## Architecture
+## Build
 
-```
-chess-server/
-├── src/
-│   ├── server/
-│   │   ├── Server.java              # Server descriptor (port, config, handlers)
-│   │   ├── ServerMain.java          # Accepts connections on port 6700 → routes to ConnectionHandler
-│   │   ├── ServerAccountHandler.java # SHA-256 account management (register/login/delete)
-│   │   ├── ServerRoomHandler.java   # Public/private room management + unique 6-char codes
-│   │   └── ConnectionHandler.java   # Room coordinator:
-│   │       ├── (4a) RoomSettings    # Game mode, timer, color preference
-│   │       ├── (4b) GameHandler     # Chess match lifecycle (start, move, end)
-│   │       └── (4c) Keep-Alive      # Ping/pong heartbeat + self-destruct on finish
-│   ├── game/
-│   │   └── ChessGame.java          # Full chess engine (all 6 piece types + board rendering)
-│   └── client/
-│       └── ClientMain.java          # Interactive console client (auth, room selection, gameplay)
-├── tests/
-│   ├── TestAccountHandler.java
-│   ├── TestRoomHandler.java
-│   ├── TestChessGame.java
-│   ├── TestNetworkIntegration.java  # End-to-end: Host creates room → Guest joins → Move → Resign
-│   └── TestRunner.java
-├── start-server.sh
-├── start-client.sh
-└── run-tests.sh
-```
-
-## How to Run
-
-### 1. Compile
 ```bash
 mkdir -p bin
 javac -d bin src/game/*.java src/server/*.java src/client/*.java tests/*.java
 ```
 
-### 2. Start the Server (port 6700)
+## Run
+
+Server (plain TCP):
+
 ```bash
 ./start-server.sh
 ```
 
-### 3. Start a Client
+Server with TLS (requires JVM SSL keystore configured externally):
+
 ```bash
-./start-client.sh           # connects to localhost:6700
-./start-client.sh HOST PORT # connects to custom host/port
+java -Dchess.server.tls=true -cp bin server.ServerMain
 ```
 
-### 4. Run All Tests
+Client:
+
+```bash
+./start-client.sh
+./start-client.sh HOST PORT
+```
+
+## Test
+
 ```bash
 ./run-tests.sh
 ```
 
-## Game Flow
+`run-tests.sh` compiles and runs tests with assertions enabled (`-ea`).
 
-1. **Client 1 (Host)** connects → registers/login/guest → creates room (public or private)
-2. Server generates a **6-character unique room code**
-3. **Client 2 (Guest)** connects → auth → joins via public list or private code
-4. `ConnectionHandler` initializes the **GameHandler** with chosen colors
-5. Players exchange moves via `MOVE:e2:e4` protocol
-6. Keep-alive **PING/PONG** every 5s (timeout after 25s)
-7. On game end: results broadcast, connection self-destructs, room is removed
+## Security notes
 
-## Client Commands (in-game)
+- Account passwords are stored with salted PBKDF2 (`PBKDF2WithHmacSHA256`) only.
+- Login checks use constant-time hash comparison and include lightweight backoff.
+- User/room input is validated (length/characters), and protocol delimiters are rejected in critical fields.
+- Server enforces bounded worker threads, connection caps, socket/read timeouts, and max line lengths.
+- Room codes use `SecureRandom`.
+- **Important:** if TLS is not enabled (`-Dchess.server.tls=true`), credentials travel in cleartext.
 
-| Command | Effect |
-|---|---|
-| `e2 e4` or `e2e4` | Move piece from e2 to e4 |
-| `resign` | Forfeit the match |
-| `SET_MODE:BLITZ` | (lobby only) Set game mode |
-| `SET_COLOR:BLACK` | (lobby only) Host plays as Black |
-| `SET_TIMER:30` | (lobby only) Set 30s turn limit |
+## Functional scope
 
-## Features
+Implemented chess legality core includes:
 
-- ♟ Full chess rules: Pawn (with 2-step initial and diagonal capture), Knight, Bishop, Rook, Queen, King
-- 🔐 SHA-256 password hashing (no plaintext credentials ever stored)
-- 🌐 Concurrent multi-room support via thread pool
-- 💓 Keep-alive heartbeat (self-healing disconnection detection)
-- 🧨 Self-destruct on match end (room cleanup, socket close)
-- 👤 Guest mode (no registration required)
-- 🏠 Public room listing + Private rooms by code
-- 📋 ASCII board rendering live in console
+- turn enforcement and legal movement checks
+- no degenerate same-square moves
+- no direct king capture
+- self-check prevention
+- checkmate and stalemate detection
+- pawn promotion (auto-promote to queen)
+
+Not implemented yet: castling, en passant, repetition/50-move draw logic.
