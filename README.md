@@ -1,6 +1,6 @@
 # chess-server
 
-Multiplayer chess game server and client written in Java, built with a Dual-Tier Orchestration architecture (Gemini CLI as Architect + GitHub Copilot as Worker).
+Multiplayer chess game server and client written in Java.
 
 ## Architecture
 
@@ -8,30 +8,33 @@ Multiplayer chess game server and client written in Java, built with a Dual-Tier
 chess-server/
 ├── src/
 │   ├── server/
-│   │   ├── Server.java              # Server descriptor (port, config, handlers)
-│   │   ├── ServerMain.java          # Accepts connections on port 6700 → routes to ConnectionHandler
-│   │   ├── ServerAccountHandler.java # SHA-256 account management (register/login/delete)
-│   │   ├── ServerRoomHandler.java   # Public/private room management + unique 6-char codes
-│   │   └── ConnectionHandler.java   # Room coordinator:
-│   │       ├── (4a) RoomSettings    # Game mode, timer, color preference
-│   │       ├── (4b) GameHandler     # Chess match lifecycle (start, move, end)
-│   │       └── (4c) Keep-Alive      # Ping/pong heartbeat + self-destruct on finish
+│   │   ├── Server.java
+│   │   ├── ServerMain.java
+│   │   ├── ServerAccountHandler.java
+│   │   ├── ServerRoomHandler.java
+│   │   └── ConnectionHandler.java
 │   ├── game/
-│   │   └── ChessGame.java          # Full chess engine (all 6 piece types + board rendering)
+│   │   └── ChessGame.java
 │   └── client/
-│       └── ClientMain.java          # Interactive console client (auth, room selection, gameplay)
+│       ├── ClientMain.java
+│       ├── ClientConfig.java
+│       ├── ClientProtocolParser.java
+│       ├── TerminalTheme.java
+│       ├── TerminalUI.java
+│       └── LineListener.java
 ├── tests/
 │   ├── TestAccountHandler.java
 │   ├── TestRoomHandler.java
 │   ├── TestChessGame.java
-│   ├── TestNetworkIntegration.java  # End-to-end: Host creates room → Guest joins → Move → Resign
+│   ├── TestNetworkIntegration.java
+│   ├── TestClientComponents.java
 │   └── TestRunner.java
 ├── start-server.sh
 ├── start-client.sh
 └── run-tests.sh
 ```
 
-## How to Run
+## Build and Run
 
 ### 1. Compile
 ```bash
@@ -39,31 +42,55 @@ mkdir -p bin
 javac -d bin src/game/*.java src/server/*.java src/client/*.java tests/*.java
 ```
 
-### 2. Start the Server (port 6700)
+### 2. Start the server
 ```bash
 ./start-server.sh
 ```
 
-### 3. Start a Client
+### 3. Start a client
 ```bash
-./start-client.sh           # connects to localhost:6700
-./start-client.sh HOST PORT # connects to custom host/port
+./start-client.sh
+./start-client.sh HOST PORT
+./start-client.sh HOST PORT --compact --no-animations
+./start-client.sh HOST PORT --no-color --no-unicode --no-emoji
+./start-client.sh HOST PORT --timeout-ms=45000
 ```
 
-### 4. Run All Tests
+Supported client flags:
+- `--compact` for narrow terminals
+- `--no-color`, `--no-unicode`, `--no-emoji` for accessibility fallback
+- `--no-animations` to disable connection animation
+- `--timeout-ms=<1000..120000>` for socket connect/read timeout
+
+### 4. Run tests
 ```bash
 ./run-tests.sh
+# or
+java -ea -cp bin tests.TestRunner
 ```
 
-## Game Flow
+## UI Preview (terminal)
 
-1. **Client 1 (Host)** connects → registers/login/guest → creates room (public or private)
-2. Server generates a **6-character unique room code**
-3. **Client 2 (Guest)** connects → auth → joins via public list or private code
-4. `ConnectionHandler` initializes the **GameHandler** with chosen colors
-5. Players exchange moves via `MOVE:e2:e4` protocol
-6. Keep-alive **PING/PONG** every 5s (timeout after 25s)
-7. On game end: results broadcast, connection self-destructs, room is removed
+```text
+==========================================================
+                 CHESS MULTIPLAYER CLIENT 💠
+==========================================================
+╭─ SESSION
+[HOST] localhost
+[PORT] 6700
+[MODE] STANDARD
+╰
+
+╭─ AUTH
+ 1) Login
+ 2) Register new account
+ 3) Play as Guest
+ 4) Exit
+╰
+▶ Select option [1-4]:
+```
+
+The client keeps protocol compatibility with server messages (`AUTH_*`, `ROOMS_LIST`, `ROOM_CREATED`, `JOIN_*`, `BOARD`, `MOVE_*`, `PING/PONG`, `GAME_OVER`) while adding clearer hierarchy, status badges, concise feedback and synchronized output between listener/input loops.
 
 ## Client Commands (in-game)
 
@@ -74,14 +101,3 @@ javac -d bin src/game/*.java src/server/*.java src/client/*.java tests/*.java
 | `SET_MODE:BLITZ` | (lobby only) Set game mode |
 | `SET_COLOR:BLACK` | (lobby only) Host plays as Black |
 | `SET_TIMER:30` | (lobby only) Set 30s turn limit |
-
-## Features
-
-- ♟ Full chess rules: Pawn (with 2-step initial and diagonal capture), Knight, Bishop, Rook, Queen, King
-- 🔐 SHA-256 password hashing (no plaintext credentials ever stored)
-- 🌐 Concurrent multi-room support via thread pool
-- 💓 Keep-alive heartbeat (self-healing disconnection detection)
-- 🧨 Self-destruct on match end (room cleanup, socket close)
-- 👤 Guest mode (no registration required)
-- 🏠 Public room listing + Private rooms by code
-- 📋 ASCII board rendering live in console
