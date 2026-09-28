@@ -1,6 +1,6 @@
 # chess-server
 
-Multiplayer chess server/client in Java.
+Multiplayer chess game server and client written in Java.
 
 ## Build
 
@@ -9,53 +9,33 @@ mkdir -p bin
 javac -d bin src/game/*.java src/server/*.java src/client/*.java tests/*.java
 ```
 
-## Run
-
-Server (plain TCP):
-
+### 2. Start the server
 ```bash
 ./start-server.sh
 ```
 
-Server with TLS (requires JVM SSL keystore configured externally):
-
-```bash
-java -Dchess.server.tls=true -cp bin server.ServerMain
-```
-
-Client:
-
+### 3. Start a client
 ```bash
 ./start-client.sh
 ./start-client.sh HOST PORT
+./start-client.sh HOST PORT --compact --no-animations
+./start-client.sh HOST PORT --no-color --no-unicode --no-emoji
+./start-client.sh HOST PORT --timeout-ms=45000
 ```
 
-## Test
+Supported client flags:
+- `--compact` for narrow terminals
+- `--no-color`, `--no-unicode`, `--no-emoji` for accessibility fallback
+- `--no-animations` to disable connection animation
+- `--timeout-ms=<1000..120000>` for socket connect/read timeout
 
+### 4. Run tests
 ```bash
 ./run-tests.sh
+# or
+java -ea -cp bin tests.TestRunner
 ```
 
-`run-tests.sh` compiles and runs tests with assertions enabled (`-ea`).
+## UI Preview (terminal)
 
-## Security notes
-
-- Account passwords are stored with salted PBKDF2 (`PBKDF2WithHmacSHA256`) only.
-- Login checks use constant-time hash comparison and include lightweight backoff.
-- User/room input is validated (length/characters), and protocol delimiters are rejected in critical fields.
-- Server enforces bounded worker threads, connection caps, socket/read timeouts, and max line lengths.
-- Room codes use `SecureRandom`.
-- **Important:** if TLS is not enabled (`-Dchess.server.tls=true`), credentials travel in cleartext.
-
-## Functional scope
-
-Implemented chess legality core includes:
-
-- turn enforcement and legal movement checks
-- no degenerate same-square moves
-- no direct king capture
-- self-check prevention
-- checkmate and stalemate detection
-- pawn promotion (auto-promote to queen)
-
-Not implemented yet: castling, en passant, repetition/50-move draw logic.
+```text

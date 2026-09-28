@@ -7,28 +7,35 @@ import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.net.SocketTimeoutException;
+import java.util.List;
 import java.util.Scanner;
 
 /**
- * ClientMain provides an interactive console UI for players.
+ * ClientMain provides an interactive console UI for players:
+ * - Register, Login, or Play as Guest
+ * - Create room, join public room, or enter private room code
+ * - Live board display
+ * - Automatic keep-alive ping/pong
  */
 public class ClientMain {
-
-    private static final String DEFAULT_HOST = "localhost";
-    private static final int DEFAULT_PORT = 6700;
-    private static final int CONNECT_TIMEOUT_MS = 10_000;
-    private static final int READ_TIMEOUT_MS = 30_000;
 
     private Socket socket;
     private BufferedReader in;
     private PrintWriter out;
     private Scanner scanner;
+    private TerminalUI ui;
     private volatile boolean inGame = false;
     private volatile boolean running = true;
-    private String myColor = "";
+    private volatile String myColor = "";
+    private LineListener listener;
 
     public static void main(String[] args) {
+        try {
+            ClientConfig config = ClientConfig.fromArgs(args);
+            new ClientMain().start(config);
+        } catch (IllegalArgumentException ex) {
+            System.err.println(ex.getMessage());
+        }
         String host = args.length > 0 ? args[0] : DEFAULT_HOST;
         int port = DEFAULT_PORT;
 
@@ -49,13 +56,28 @@ public class ClientMain {
         new ClientMain().start(host, port);
     }
 
-    public void start(String host, int port) {
+    public void start(ClientConfig config) {
         scanner = new Scanner(System.in);
-        System.out.println("==================================================");
-        System.out.println("            CHESS MULTIPLAYER CLIENT              ");
-        System.out.println("==================================================");
+        TerminalTheme theme = new TerminalTheme(
+                config.isColorEnabled(),
+                config.isUnicodeEnabled(),
+                config.isEmojiEnabled(),
+                config.isCompact());
+        ui = new TerminalUI(theme, System.out);
+
+        ui.showHeader();
+        ui.card(
+                "SESSION",
+                ui.theme().badge("HOST", config.getHost()),
+                ui.theme().badge("PORT", String.valueOf(config.getPort())),
+                ui.theme().badge("MODE", config.isCompact() ? "COMPACT" : "STANDARD")
+        );
 
         try {
+            showConnectingIndicator(config);
+            socket = new Socket();
+            socket.connect(new InetSocketAddress(config.getHost(), config.getPort()), config.getTimeoutMs());
+            socket.setSoTimeout(config.getTimeoutMs());
             System.out.println("[*] Connecting to chess server at " + host + ":" + port + "...");
             socket = new Socket();
             socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
@@ -64,15 +86,16 @@ public class ClientMain {
             out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
 
             String welcome = in.readLine();
-            System.out.println("[Server] " + welcome);
+            ui.ok("Connected");
+            ui.info("Server says: " + welcome);
 
             if (!performAuth()) {
-                System.out.println("[!] Exiting client.");
+                ui.warn("Exiting client");
                 return;
             }
 
             if (!performRoomSelection()) {
-                System.out.println("[!] Exiting room setup.");
+                ui.warn("Room setup closed");
                 return;
             }
 
@@ -81,53 +104,63 @@ public class ClientMain {
         } catch (SocketTimeoutException ste) {
             System.err.println("[Client Error] Timed out waiting for server response.");
         } catch (IOException e) {
-            System.err.println("[Client Error] Connection failed: " + e.getMessage());
+            ui.error("Connection failed: " + e.getMessage());
         } finally {
             close();
         }
     }
 
+    private void showConnectingIndicator(ClientConfig config) {
+        if (!config.isAnimationsEnabled()) {
+            ui.info("Connecting...");
+            return;
+        }
+
+        String[] frames = ui.theme().isCompact()
+                ? new String[]{".", "..", "..."}
+                : new String[]{"░░░", "▒▒▒", "▓▓▓"};
+        for (String frame : frames) {
+            ui.println(ui.theme().info("Connecting " + frame));
+            try {
+                Thread.sleep(80);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
     private boolean performAuth() throws IOException {
         while (running) {
-            System.out.println("\n--- AUTHENTICATION ---");
-            System.out.println("1. Login");
-            System.out.println("2. Register new account");
-            System.out.println("3. Play as Guest (Ospite)");
-            System.out.println("4. Exit");
-            System.out.print("Choose option (1-4): ");
-
-            String choice = scanner.nextLine().trim();
+            ui.menu("AUTH", "Login", "Register new account", "Play as Guest", "Exit");
+            String choice = ui.prompt(scanner, "Select option [1-4]:").trim();
             if ("1".equals(choice)) {
-                System.out.print("Username: ");
-                String u = scanner.nextLine().trim();
-                System.out.print("Password: ");
-                String p = scanner.nextLine().trim();
-                out.println("LOGIN:" + u + ":" + p);
+                String user = ui.prompt(scanner, "Username:").trim();
+                String pass = ui.prompt(scanner, "Password:").trim();
+                out.println("LOGIN:" + user + ":" + pass);
             } else if ("2".equals(choice)) {
-                System.out.print("Choose Username: ");
-                String u = scanner.nextLine().trim();
-                System.out.print("Choose Password: ");
-                String p = scanner.nextLine().trim();
-                out.println("REGISTER:" + u + ":" + p);
+                String user = ui.prompt(scanner, "Choose username:").trim();
+                String pass = ui.prompt(scanner, "Choose password:").trim();
+                out.println("REGISTER:" + user + ":" + pass);
             } else if ("3".equals(choice)) {
-                System.out.print("Enter guest nickname (or press ENTER for random): ");
-                String nick = scanner.nextLine().trim();
+                String nick = ui.prompt(scanner, "Guest nickname (ENTER for random):").trim();
                 out.println("GUEST:" + nick);
             } else if ("4".equals(choice)) {
                 return false;
             } else {
-                System.out.println("[!] Invalid option.");
+                ui.warn("Invalid option. Choose 1-4.");
                 continue;
             }
 
             String resp = in.readLine();
             if (resp != null && resp.startsWith("AUTH_OK:")) {
-                System.out.println("[✓] " + resp.substring(8));
+                ui.ok(resp.substring(8));
                 return true;
-            } else if (resp != null && resp.startsWith("AUTH_ERROR:")) {
-                System.out.println("[✗] " + resp.substring(11));
+            }
+            if (resp != null && resp.startsWith("AUTH_ERROR:")) {
+                ui.error(resp.substring(11));
             } else {
-                System.out.println("[?] Server: " + resp);
+                ui.warn("Server: " + resp);
             }
         }
         return false;
@@ -135,15 +168,43 @@ public class ClientMain {
 
     private boolean performRoomSelection() throws IOException {
         while (running) {
-            System.out.println("\n--- ROOM SELECTION ---");
-            System.out.println("1. Create a new Room");
-            System.out.println("2. List & Join Public Rooms");
-            System.out.println("3. Join Private Room via Code");
-            System.out.println("4. Exit");
-            System.out.print("Choose option (1-4): ");
+            ui.menu("ROOMS", "Create new room", "List & join public room", "Join private room via code", "Exit");
+            String choice = ui.prompt(scanner, "Select option [1-4]:").trim();
 
-            String choice = scanner.nextLine().trim();
             if ("1".equals(choice)) {
+                String name = ui.prompt(scanner, "Room name:").trim();
+                String privateFlag = ui.prompt(scanner, "Private room? [y/N]:").trim();
+                boolean isPrivate = "y".equalsIgnoreCase(privateFlag);
+                out.println("CREATE_ROOM:" + name + ":" + isPrivate);
+
+                String roomCreatedLine = in.readLine();
+                try {
+                    ClientProtocolParser.RoomCreated created = ClientProtocolParser.parseRoomCreated(roomCreatedLine);
+                    ui.ok("Room created: " + created.getRoomName());
+                    ui.card(
+                            "LOBBY",
+                            ui.theme().badge("CODE", created.getRoomCode()),
+                            ui.theme().badge("VISIBILITY", created.isPrivate() ? "PRIVATE" : "PUBLIC"),
+                            "Share the code with your opponent"
+                    );
+                    return true;
+                } catch (IllegalArgumentException ex) {
+                    ui.error("Invalid server room response: " + ex.getMessage());
+                }
+
+            } else if ("2".equals(choice)) {
+                out.println("LIST_ROOMS");
+                String line = in.readLine();
+                try {
+                    List<ClientProtocolParser.PublicRoom> rooms = ClientProtocolParser.parseRoomsList(line);
+                    if (rooms.isEmpty()) {
+                        ui.warn("No public rooms available.");
+                        continue;
+                    }
+                    String[] lines = new String[rooms.size()];
+                    for (int i = 0; i < rooms.size(); i++) {
+                        ClientProtocolParser.PublicRoom room = rooms.get(i);
+                        lines[i] = String.format("%d) %s | %s | host=%s", i + 1, room.getCode(), room.getName(), room.getHost());
                 System.out.print("Enter Room Name: ");
                 String name = scanner.nextLine().trim();
                 System.out.print("Make room private? (y/N): ");
@@ -177,41 +238,53 @@ public class ClientMain {
                         if (info.length < 3) continue;
                         System.out.printf(" [%d] Code: %s | Name: %s | Host: %s\n", i, info[0], info[1], info[2]);
                     }
-                    System.out.print("Enter room code to join (or BACK): ");
-                    String code = scanner.nextLine().trim();
-                    if ("BACK".equalsIgnoreCase(code)) continue;
+                    ui.card("PUBLIC ROOMS", lines);
 
-                    out.println("JOIN_ROOM:" + code);
-                    String joinResp = in.readLine();
-                    if (joinResp != null && joinResp.startsWith("JOIN_OK:")) {
-                        System.out.println("[✓] " + joinResp.substring(8));
-                        return true;
-                    } else {
-                        System.out.println("[✗] " + joinResp);
+                    String code = ui.prompt(scanner, "Type room code to join (or BACK):").trim().toUpperCase();
+                    if ("BACK".equals(code)) {
+                        continue;
                     }
+                    out.println("JOIN_ROOM:" + code);
+                    if (handleJoinResponse(in.readLine())) {
+                        return true;
+                    }
+                } catch (IllegalArgumentException ex) {
+                    ui.error("Could not parse room list: " + ex.getMessage());
                 }
+
             } else if ("3".equals(choice)) {
-                System.out.print("Enter 6-character private room code: ");
-                String code = scanner.nextLine().trim().toUpperCase();
+                String code = ui.prompt(scanner, "Private room code:").trim().toUpperCase();
                 out.println("JOIN_ROOM:" + code);
-                String joinResp = in.readLine();
-                if (joinResp != null && joinResp.startsWith("JOIN_OK:")) {
-                    System.out.println("[✓] " + joinResp.substring(8));
+                if (handleJoinResponse(in.readLine())) {
                     return true;
-                } else {
-                    System.out.println("[✗] " + joinResp);
                 }
             } else if ("4".equals(choice)) {
                 return false;
+            } else {
+                ui.warn("Invalid option. Choose 1-4.");
             }
         }
         return false;
     }
 
+    private boolean handleJoinResponse(String joinResp) {
+        if (joinResp != null && joinResp.startsWith("JOIN_OK:")) {
+            ui.ok(joinResp.substring(8));
+            return true;
+        }
+        ui.error(joinResp == null ? "Server closed connection" : joinResp);
+        return false;
+    }
+
     private void playGame() {
         inGame = true;
-        System.out.println("[*] Entering game lobby / session...");
+        ui.card("GAME", "Lobby ready", "Commands: e2 e4 | e2e4 | resign", "Host settings: SET_MODE/SET_COLOR/SET_TIMER");
 
+        listener = new LineListener(in, this::handleServerLine, () -> {
+            if (running) {
+                ui.warn("Disconnected from game session.");
+                running = false;
+                inGame = false;
         Thread listenerThread = new Thread(() -> {
             try {
                 String line;
@@ -262,10 +335,78 @@ public class ClientMain {
                 }
             }
         });
-        listenerThread.setDaemon(true);
-        listenerThread.start();
+        listener.start("client-listener");
 
         while (running && inGame) {
+            String input = ui.prompt(scanner, "Action:").trim();
+            if (!running) break;
+            if (input.isEmpty()) continue;
+
+            if (input.equalsIgnoreCase("resign")) {
+                out.println("RESIGN");
+            } else if (input.startsWith("SET_")) {
+                out.println(input);
+            } else {
+                String[] parts = input.split("\\s+");
+                if (parts.length == 2) {
+                    out.println("MOVE:" + parts[0] + ":" + parts[1]);
+                } else if (parts.length == 1 && parts[0].length() == 4) {
+                    out.println("MOVE:" + parts[0].substring(0, 2) + ":" + parts[0].substring(2, 4));
+                } else {
+                    ui.warn("Invalid format. Use e2 e4, e2e4, SET_*, or resign.");
+                }
+            }
+        }
+    }
+
+    private void handleServerLine(String line) throws IOException {
+        if ("PING".equals(line)) {
+            out.println("PONG");
+            return;
+        }
+
+        if (line.startsWith("ASSIGNED_COLOR:")) {
+            myColor = line.substring(15).trim();
+            ui.ok("Assigned color: " + myColor);
+            return;
+        }
+
+        if ("BOARD:".equals(line)) {
+            try {
+                String board = ClientProtocolParser.parseBoardBlock(line, in);
+                String turnLabel = board.contains("Current Turn: " + myColor)
+                        ? "YOUR TURN"
+                        : "OPPONENT TURN";
+                ui.printBoard(board + "\n" + ui.theme().badge("TURN", turnLabel));
+            } catch (IllegalArgumentException ex) {
+                ui.error("Invalid board payload: " + ex.getMessage());
+            }
+            return;
+        }
+
+        if (line.startsWith("MOVE_OK:")) {
+            ui.ok(line.substring(8));
+            return;
+        }
+
+        if (line.startsWith("MOVE_ERROR:")) {
+            ui.error("Invalid move: " + line.substring(11));
+            return;
+        }
+
+        if (line.startsWith("GAME_OVER:")) {
+            ui.card("GAME OVER", line.substring(10));
+            running = false;
+            inGame = false;
+            return;
+        }
+
+        if (line.startsWith("INFO:")) {
+            ui.info(line.substring(5));
+            return;
+        }
+
+        ui.info("Server: " + line);
             if (scanner.hasNextLine()) {
                 String input = scanner.nextLine().trim();
                 if (!running) break;
@@ -294,8 +435,13 @@ public class ClientMain {
 
     private void close() {
         running = false;
+        if (listener != null) {
+            listener.stop();
+            listener.awaitStop(1500);
+        }
         try {
             if (socket != null && !socket.isClosed()) socket.close();
+        } catch (IOException ignored) {
         } catch (IOException e) {
             System.err.println("Failed to close client socket: " + e.getMessage());
         }
