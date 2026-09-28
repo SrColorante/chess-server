@@ -10,6 +10,7 @@ public class TestRunner {
             TestRoomHandler.run();
             TestChessGame.run();
             TestNetworkIntegration.run();
+            TestClientComponents.run();
             System.out.println("\n[✓] ALL CONTRACT & LOGIC TESTS PASSED SUCCESSFULLY!");
             System.exit(0);
         } catch (AssertionError e) {
