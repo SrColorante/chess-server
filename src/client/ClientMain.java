@@ -36,6 +36,24 @@ public class ClientMain {
         } catch (IllegalArgumentException ex) {
             System.err.println(ex.getMessage());
         }
+        String host = args.length > 0 ? args[0] : DEFAULT_HOST;
+        int port = DEFAULT_PORT;
+
+        if (args.length > 1) {
+            try {
+                port = Integer.parseInt(args[1]);
+            } catch (NumberFormatException nfe) {
+                System.err.println("Invalid port: must be numeric");
+                return;
+            }
+        }
+
+        if (!isValidHost(host) || port < 1 || port > 65535) {
+            System.err.println("Invalid host or port.");
+            return;
+        }
+
+        new ClientMain().start(host, port);
     }
 
     public void start(ClientConfig config) {
@@ -60,6 +78,10 @@ public class ClientMain {
             socket = new Socket();
             socket.connect(new InetSocketAddress(config.getHost(), config.getPort()), config.getTimeoutMs());
             socket.setSoTimeout(config.getTimeoutMs());
+            System.out.println("[*] Connecting to chess server at " + host + ":" + port + "...");
+            socket = new Socket();
+            socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
+            socket.setSoTimeout(READ_TIMEOUT_MS);
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
 
@@ -79,6 +101,8 @@ public class ClientMain {
 
             playGame();
 
+        } catch (SocketTimeoutException ste) {
+            System.err.println("[Client Error] Timed out waiting for server response.");
         } catch (IOException e) {
             ui.error("Connection failed: " + e.getMessage());
         } finally {
@@ -181,6 +205,38 @@ public class ClientMain {
                     for (int i = 0; i < rooms.size(); i++) {
                         ClientProtocolParser.PublicRoom room = rooms.get(i);
                         lines[i] = String.format("%d) %s | %s | host=%s", i + 1, room.getCode(), room.getName(), room.getHost());
+                System.out.print("Enter Room Name: ");
+                String name = scanner.nextLine().trim();
+                System.out.print("Make room private? (y/N): ");
+                boolean isPriv = scanner.nextLine().trim().equalsIgnoreCase("y");
+                out.println("CREATE_ROOM:" + name + ":" + isPriv);
+
+                String roomCreated = in.readLine();
+                if (roomCreated != null && roomCreated.startsWith("ROOM_CREATED:")) {
+                    String[] parts = roomCreated.split(":", 4);
+                    if (parts.length >= 4) {
+                        System.out.println("\n[✓] Room Created: " + parts[1]);
+                        System.out.println("[*] Room Code: >>> " + parts[2] + " <<< (Share this with opponent!)");
+                        return true;
+                    }
+                }
+                System.out.println("[✗] Invalid room creation response: " + roomCreated);
+
+            } else if ("2".equals(choice)) {
+                out.println("LIST_ROOMS");
+                String resp = in.readLine();
+                if (resp != null && resp.startsWith("ROOMS_LIST:")) {
+                    String data = resp.substring(11);
+                    String[] rooms = data.split(";");
+                    if (rooms.length == 0 || "0".equals(rooms[0])) {
+                        System.out.println("[!] No active public rooms available. Try creating one!");
+                        continue;
+                    }
+                    System.out.println("\nAvailable Public Rooms:");
+                    for (int i = 1; i < rooms.length; i++) {
+                        String[] info = rooms[i].split("\\|", 3);
+                        if (info.length < 3) continue;
+                        System.out.printf(" [%d] Code: %s | Name: %s | Host: %s\n", i, info[0], info[1], info[2]);
                     }
                     ui.card("PUBLIC ROOMS", lines);
 
@@ -229,6 +285,54 @@ public class ClientMain {
                 ui.warn("Disconnected from game session.");
                 running = false;
                 inGame = false;
+        Thread listenerThread = new Thread(() -> {
+            try {
+                String line;
+                while (running && (line = in.readLine()) != null) {
+                    if ("PING".equals(line)) {
+                        out.println("PONG");
+                        continue;
+                    }
+                    if (line.startsWith("ASSIGNED_COLOR:")) {
+                        myColor = line.substring(15).trim();
+                        System.out.println("\n>>> YOU ARE PLAYING AS: " + myColor + " <<<");
+                    } else if (line.startsWith("BOARD:")) {
+                        StringBuilder boardBuilder = new StringBuilder();
+                        String bLine;
+                        while ((bLine = in.readLine()) != null) {
+                            boardBuilder.append(bLine).append("\n");
+                            if (bLine.contains("Current Turn:")) {
+                                break;
+                            }
+                        }
+                        System.out.println(boardBuilder);
+                        System.out.print("Your action (e.g. 'e2 e4' or 'resign'): ");
+                    } else if (line.startsWith("MOVE_OK:")) {
+                        System.out.println("\n[Move] " + line.substring(8));
+                    } else if (line.startsWith("MOVE_ERROR:")) {
+                        System.out.println("\n[!] Invalid Move: " + line.substring(11));
+                        System.out.print("Try again (e.g. 'e2 e4'): ");
+                    } else if (line.startsWith("GAME_OVER:")) {
+                        System.out.println("\n==============================================");
+                        System.out.println(" [GAME OVER] " + line.substring(10));
+                        System.out.println("==============================================");
+                        running = false;
+                        inGame = false;
+                        break;
+                    } else if (line.startsWith("INFO:")) {
+                        System.out.println("\n[Info] " + line.substring(5));
+                    } else {
+                        System.out.println("\n[Server] " + line);
+                    }
+                }
+            } catch (SocketTimeoutException ste) {
+                if (running) {
+                    System.out.println("\n[Server timeout - no data received]");
+                }
+            } catch (IOException e) {
+                if (running) {
+                    System.out.println("\n[Disconnected from game session]");
+                }
             }
         });
         listener.start("client-listener");
@@ -303,6 +407,30 @@ public class ClientMain {
         }
 
         ui.info("Server: " + line);
+            if (scanner.hasNextLine()) {
+                String input = scanner.nextLine().trim();
+                if (!running) break;
+
+                if (input.equalsIgnoreCase("resign")) {
+                    out.println("RESIGN");
+                } else if (!input.isEmpty()) {
+                    String[] parts = input.split("\\s+");
+                    if (parts.length == 2) {
+                        out.println("MOVE:" + parts[0] + ":" + parts[1]);
+                    } else if (parts.length == 1 && parts[0].length() == 4) {
+                        out.println("MOVE:" + parts[0].substring(0, 2) + ":" + parts[0].substring(2, 4));
+                    } else if (input.startsWith("SET_")) {
+                        out.println(input);
+                    } else {
+                        System.out.println("Format: 'e2 e4' (from to) or 'resign'");
+                    }
+                }
+            }
+        }
+    }
+
+    private static boolean isValidHost(String host) {
+        return host != null && !host.trim().isEmpty() && !host.contains("\n") && !host.contains("\r");
     }
 
     private void close() {
@@ -314,6 +442,8 @@ public class ClientMain {
         try {
             if (socket != null && !socket.isClosed()) socket.close();
         } catch (IOException ignored) {
+        } catch (IOException e) {
+            System.err.println("Failed to close client socket: " + e.getMessage());
         }
     }
 }
