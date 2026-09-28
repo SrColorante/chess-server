@@ -1,20 +1,24 @@
 package client;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.util.Scanner;
 
 /**
- * ClientMain provides an interactive console UI for players:
- * - Register, Login, or Play as Guest
- * - Create room, join public room, or enter private room code
- * - Live ASCII chess board display
- * - Automatic background keep-alive ping/pong
+ * ClientMain provides an interactive console UI for players.
  */
 public class ClientMain {
 
     private static final String DEFAULT_HOST = "localhost";
     private static final int DEFAULT_PORT = 6700;
+    private static final int CONNECT_TIMEOUT_MS = 10_000;
+    private static final int READ_TIMEOUT_MS = 30_000;
 
     private Socket socket;
     private BufferedReader in;
@@ -26,7 +30,22 @@ public class ClientMain {
 
     public static void main(String[] args) {
         String host = args.length > 0 ? args[0] : DEFAULT_HOST;
-        int port = args.length > 1 ? Integer.parseInt(args[1]) : DEFAULT_PORT;
+        int port = DEFAULT_PORT;
+
+        if (args.length > 1) {
+            try {
+                port = Integer.parseInt(args[1]);
+            } catch (NumberFormatException nfe) {
+                System.err.println("Invalid port: must be numeric");
+                return;
+            }
+        }
+
+        if (!isValidHost(host) || port < 1 || port > 65535) {
+            System.err.println("Invalid host or port.");
+            return;
+        }
+
         new ClientMain().start(host, port);
     }
 
@@ -38,29 +57,29 @@ public class ClientMain {
 
         try {
             System.out.println("[*] Connecting to chess server at " + host + ":" + port + "...");
-            socket = new Socket(host, port);
+            socket = new Socket();
+            socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
+            socket.setSoTimeout(READ_TIMEOUT_MS);
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
 
-            // Read welcome message
             String welcome = in.readLine();
             System.out.println("[Server] " + welcome);
 
-            // 1. Authentication
             if (!performAuth()) {
                 System.out.println("[!] Exiting client.");
                 return;
             }
 
-            // 2. Room Selection
             if (!performRoomSelection()) {
                 System.out.println("[!] Exiting room setup.");
                 return;
             }
 
-            // 3. Gameplay loop
             playGame();
 
+        } catch (SocketTimeoutException ste) {
+            System.err.println("[Client Error] Timed out waiting for server response.");
         } catch (IOException e) {
             System.err.println("[Client Error] Connection failed: " + e.getMessage());
         } finally {
@@ -131,27 +150,31 @@ public class ClientMain {
                 boolean isPriv = scanner.nextLine().trim().equalsIgnoreCase("y");
                 out.println("CREATE_ROOM:" + name + ":" + isPriv);
 
-                // Read room creation info
                 String roomCreated = in.readLine();
                 if (roomCreated != null && roomCreated.startsWith("ROOM_CREATED:")) {
-                    String[] parts = roomCreated.split(":");
-                    System.out.println("\n[✓] Room Created: " + parts[1]);
-                    System.out.println("[*] Room Code: >>> " + parts[2] + " <<< (Share this with opponent!)");
-                    return true;
+                    String[] parts = roomCreated.split(":", 4);
+                    if (parts.length >= 4) {
+                        System.out.println("\n[✓] Room Created: " + parts[1]);
+                        System.out.println("[*] Room Code: >>> " + parts[2] + " <<< (Share this with opponent!)");
+                        return true;
+                    }
                 }
+                System.out.println("[✗] Invalid room creation response: " + roomCreated);
+
             } else if ("2".equals(choice)) {
                 out.println("LIST_ROOMS");
                 String resp = in.readLine();
                 if (resp != null && resp.startsWith("ROOMS_LIST:")) {
                     String data = resp.substring(11);
-                    if (data.startsWith("0")) {
+                    String[] rooms = data.split(";");
+                    if (rooms.length == 0 || "0".equals(rooms[0])) {
                         System.out.println("[!] No active public rooms available. Try creating one!");
                         continue;
                     }
-                    String[] rooms = data.split(";");
                     System.out.println("\nAvailable Public Rooms:");
                     for (int i = 1; i < rooms.length; i++) {
-                        String[] info = rooms[i].split("\\|");
+                        String[] info = rooms[i].split("\\|", 3);
+                        if (info.length < 3) continue;
                         System.out.printf(" [%d] Code: %s | Name: %s | Host: %s\n", i, info[0], info[1], info[2]);
                     }
                     System.out.print("Enter room code to join (or BACK): ");
@@ -189,7 +212,6 @@ public class ClientMain {
         inGame = true;
         System.out.println("[*] Entering game lobby / session...");
 
-        // Background server listener (handles keep-alive PING and server events)
         Thread listenerThread = new Thread(() -> {
             try {
                 String line;
@@ -205,13 +227,12 @@ public class ClientMain {
                         StringBuilder boardBuilder = new StringBuilder();
                         String bLine;
                         while ((bLine = in.readLine()) != null) {
+                            boardBuilder.append(bLine).append("\n");
                             if (bLine.contains("Current Turn:")) {
-                                boardBuilder.append(bLine).append("\n");
                                 break;
                             }
-                            boardBuilder.append(bLine).append("\n");
                         }
-                        System.out.println(boardBuilder.toString());
+                        System.out.println(boardBuilder);
                         System.out.print("Your action (e.g. 'e2 e4' or 'resign'): ");
                     } else if (line.startsWith("MOVE_OK:")) {
                         System.out.println("\n[Move] " + line.substring(8));
@@ -231,6 +252,10 @@ public class ClientMain {
                         System.out.println("\n[Server] " + line);
                     }
                 }
+            } catch (SocketTimeoutException ste) {
+                if (running) {
+                    System.out.println("\n[Server timeout - no data received]");
+                }
             } catch (IOException e) {
                 if (running) {
                     System.out.println("\n[Disconnected from game session]");
@@ -240,7 +265,6 @@ public class ClientMain {
         listenerThread.setDaemon(true);
         listenerThread.start();
 
-        // Foreground user input loop
         while (running && inGame) {
             if (scanner.hasNextLine()) {
                 String input = scanner.nextLine().trim();
@@ -255,7 +279,6 @@ public class ClientMain {
                     } else if (parts.length == 1 && parts[0].length() == 4) {
                         out.println("MOVE:" + parts[0].substring(0, 2) + ":" + parts[0].substring(2, 4));
                     } else if (input.startsWith("SET_")) {
-                        // Allow room settings commands before match
                         out.println(input);
                     } else {
                         System.out.println("Format: 'e2 e4' (from to) or 'resign'");
@@ -265,10 +288,16 @@ public class ClientMain {
         }
     }
 
+    private static boolean isValidHost(String host) {
+        return host != null && !host.trim().isEmpty() && !host.contains("\n") && !host.contains("\r");
+    }
+
     private void close() {
         running = false;
         try {
             if (socket != null && !socket.isClosed()) socket.close();
-        } catch (IOException ignored) {}
+        } catch (IOException e) {
+            System.err.println("Failed to close client socket: " + e.getMessage());
+        }
     }
 }
