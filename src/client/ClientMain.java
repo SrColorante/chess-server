@@ -61,7 +61,7 @@ public class ClientMain {
             showConnectingIndicator(config);
             socket = new Socket();
             socket.connect(new InetSocketAddress(config.getHost(), config.getPort()), config.getTimeoutMs());
-            socket.setSoTimeout(config.getTimeoutMs());
+            socket.setSoTimeout(0); // Server manages timeouts, prevent client from disconnecting in lobby
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
 

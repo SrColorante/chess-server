@@ -25,8 +25,8 @@ import javax.net.ssl.SSLServerSocketFactory;
  */
 public class ServerMain {
     private static final int MAX_MESSAGE_LENGTH = 512;
-    private static final int AUTH_TIMEOUT_MS = 30_000;
-    private static final int LOBBY_TIMEOUT_MS = 60_000;
+    private static final int AUTH_TIMEOUT_MS = 300_000;   // 5 minuti per autenticarsi
+    private static final int LOBBY_TIMEOUT_MS = 600_000;  // 10 minuti in lobby
     private static final int MAX_CONNECTIONS = 128;
     private static final int THREADS = Math.max(8, Runtime.getRuntime().availableProcessors() * 2);
     private static final String NAME_PATTERN = "^[A-Za-z0-9_-]{3,24}$";

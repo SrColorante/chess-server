@@ -1,10 +1,8 @@
 package client;
 
-import game.ChessGame;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
-import java.awt.event.*;
 import java.io.*;
 import java.net.Socket;
 import java.util.HashMap;
@@ -17,7 +15,6 @@ public class ClientGUI extends JFrame {
     private static final Color SURFACE_COLOR = new Color(42, 42, 48);
     private static final Color PRIMARY_COLOR = new Color(74, 144, 226);
     private static final Color TEXT_PRIMARY = new Color(240, 240, 240);
-    private static final Color TEXT_SECONDARY = new Color(160, 160, 160);
     private static final Color BOARD_LIGHT = new Color(238, 238, 210);
     private static final Color BOARD_DARK = new Color(118, 150, 86);
     
@@ -38,22 +35,22 @@ public class ClientGUI extends JFrame {
 
     public ClientGUI() {
         super("Modern Chess Client");
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(900, 700);
-        setLocationRelativeTo(null);
         
-        // Setup minimalist UI Defaults
-        UIManager.put("Panel.background", BG_COLOR);
-        UIManager.put("Label.foreground", TEXT_PRIMARY);
-        UIManager.put("OptionPane.background", BG_COLOR);
-        UIManager.put("OptionPane.messageForeground", TEXT_PRIMARY);
-        UIManager.put("Button.font", new Font("SansSerif", Font.BOLD, 14));
+        try {
+            UIManager.setLookAndFeel(UIManager.getCrossPlatformLookAndFeelClassName());
+        } catch (Exception e) {}
+
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setSize(900, 750);
+        setLocationRelativeTo(null);
+        getContentPane().setBackground(BG_COLOR);
         
         initUnicodeMap();
         
         cardLayout = new CardLayout();
         mainContainer = new JPanel(cardLayout);
         mainContainer.setBackground(BG_COLOR);
+        mainContainer.setOpaque(true);
         
         mainContainer.add(createAuthPanel(), "AUTH");
         mainContainer.add(createLobbyPanel(), "LOBBY");
@@ -83,47 +80,59 @@ public class ClientGUI extends JFrame {
                 out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
                 
                 String welcome = in.readLine();
-                System.out.println("Connected: " + welcome);
+                if (welcome == null) throw new IOException("Server returned null on welcome");
                 
                 listener = new LineListener(in, this::handleServerLine, () -> {
-                    JOptionPane.showMessageDialog(this, "Disconnected from server");
-                    System.exit(0);
+                    SwingUtilities.invokeLater(() -> {
+                        showErrorPopup("Disconnected from server");
+                        System.exit(0);
+                    });
                 });
                 listener.start("GUI-Listener");
             } catch (Exception e) {
-                JOptionPane.showMessageDialog(this, "Could not connect to server: " + e.getMessage());
-                System.exit(1);
+                SwingUtilities.invokeLater(() -> {
+                    showErrorPopup("Could not connect to server: " + e.getMessage());
+                });
             }
         }).start();
+    }
+    
+    private void showErrorPopup(String msg) {
+        JOptionPane.showMessageDialog(this, msg, "Error", JOptionPane.ERROR_MESSAGE);
     }
     
     private void send(String cmd) {
         if (out != null) {
             out.println(cmd);
+        } else {
+            showErrorPopup("Not connected to server!");
         }
     }
 
     private void handleServerLine(String line) {
         SwingUtilities.invokeLater(() -> {
-            if (line.startsWith("AUTH_OK:")) {
-                cardLayout.show(mainContainer, "LOBBY");
-            } else if (line.startsWith("AUTH_ERROR:")) {
-                JOptionPane.showMessageDialog(this, line.substring(11), "Auth Error", JOptionPane.ERROR_MESSAGE);
-            } else if (line.startsWith("ROOM_CREATED:") || line.startsWith("JOIN_OK:")) {
-                cardLayout.show(mainContainer, "GAME");
-            } else if (line.startsWith("ASSIGNED_COLOR:")) {
-                myColor = line.substring(15).trim();
-                setTitle("Modern Chess - Playing as " + myColor);
-            } else if (line.startsWith("BOARD:")) {
-                // Ignore the BOARD: start marker, next 8 lines are board
-                updateBoardFromNetwork();
-            } else if (line.startsWith("MOVE_ERROR:")) {
-                JOptionPane.showMessageDialog(this, line.substring(11), "Invalid Move", JOptionPane.WARNING_MESSAGE);
-            } else if (line.startsWith("GAME_OVER:")) {
-                JOptionPane.showMessageDialog(this, line.substring(10), "Game Over", JOptionPane.INFORMATION_MESSAGE);
-                cardLayout.show(mainContainer, "LOBBY");
-            } else if ("PING".equals(line)) {
-                send("PONG");
+            try {
+                if (line.startsWith("AUTH_OK:")) {
+                    cardLayout.show(mainContainer, "LOBBY");
+                } else if (line.startsWith("AUTH_ERROR:")) {
+                    showErrorPopup(line.substring(11));
+                } else if (line.startsWith("ROOM_CREATED:") || line.startsWith("JOIN_OK:")) {
+                    cardLayout.show(mainContainer, "GAME");
+                } else if (line.startsWith("ASSIGNED_COLOR:")) {
+                    myColor = line.substring(15).trim();
+                    setTitle("Modern Chess - Playing as " + myColor);
+                } else if (line.startsWith("BOARD:")) {
+                    updateBoardFromNetwork();
+                } else if (line.startsWith("MOVE_ERROR:")) {
+                    showErrorPopup(line.substring(11));
+                } else if (line.startsWith("GAME_OVER:")) {
+                    JOptionPane.showMessageDialog(this, line.substring(10), "Game Over", JOptionPane.INFORMATION_MESSAGE);
+                    cardLayout.show(mainContainer, "LOBBY");
+                } else if ("PING".equals(line)) {
+                    send("PONG");
+                }
+            } catch (Exception ex) {
+                showErrorPopup("Error processing server message: " + ex.getMessage());
             }
         });
     }
@@ -131,7 +140,7 @@ public class ClientGUI extends JFrame {
     private void updateBoardFromNetwork() {
         try {
             for (int r = 0; r < 8; r++) {
-                String row = in.readLine().substring(2); // Skip "8|" prefix
+                String row = in.readLine().substring(2); 
                 String[] pieces = row.trim().split("\\s+");
                 for (int c = 0; c < 8; c++) {
                     String p = pieces[c];
@@ -145,23 +154,20 @@ public class ClientGUI extends JFrame {
                 }
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            showErrorPopup("Error reading board: " + e.getMessage());
         }
     }
-
-    // --- Modern Minimalist UI Components ---
 
     private JPanel createAuthPanel() {
         JPanel panel = new JPanel(new GridBagLayout());
         panel.setBackground(BG_COLOR);
+        panel.setOpaque(true);
         
         JPanel card = new JPanel();
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
         card.setBackground(SURFACE_COLOR);
-        card.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(new Color(60, 60, 68), 1),
-            new EmptyBorder(40, 40, 40, 40)
-        ));
+        card.setOpaque(true);
+        card.setBorder(new EmptyBorder(40, 40, 40, 40));
         
         JLabel title = new JLabel("Chess Server");
         title.setFont(new Font("SansSerif", Font.BOLD, 28));
@@ -170,6 +176,7 @@ public class ClientGUI extends JFrame {
         
         JTextField userField = createModernTextField("Username");
         JPasswordField passField = new JPasswordField();
+        passField.setPreferredSize(new Dimension(300, 40));
         passField.setMaximumSize(new Dimension(300, 40));
         
         JButton btnLogin = createModernButton("Login", PRIMARY_COLOR);
@@ -188,7 +195,9 @@ public class ClientGUI extends JFrame {
         card.add(Box.createRigidArea(new Dimension(0, 10)));
         card.add(btnGuest);
         
-        panel.add(card);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = 0; gbc.gridy = 0;
+        panel.add(card, gbc);
         return panel;
     }
 
@@ -199,6 +208,7 @@ public class ClientGUI extends JFrame {
         JPanel card = new JPanel();
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
         card.setBackground(SURFACE_COLOR);
+        card.setOpaque(true);
         card.setBorder(new EmptyBorder(40, 40, 40, 40));
         
         JButton btnCreate = createModernButton("Create Public Room", PRIMARY_COLOR);
@@ -210,13 +220,20 @@ public class ClientGUI extends JFrame {
         
         card.add(btnCreate);
         card.add(Box.createRigidArea(new Dimension(0, 30)));
-        card.add(new JLabel("Or join existing:"));
+        
+        JLabel lbl = new JLabel("Or join existing:");
+        lbl.setForeground(TEXT_PRIMARY);
+        lbl.setAlignmentX(Component.CENTER_ALIGNMENT);
+        card.add(lbl);
+        
         card.add(Box.createRigidArea(new Dimension(0, 10)));
         card.add(codeField);
         card.add(Box.createRigidArea(new Dimension(0, 10)));
         card.add(btnJoin);
         
-        panel.add(card);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = 0; gbc.gridy = 0;
+        panel.add(card, gbc);
         return panel;
     }
 
@@ -227,12 +244,12 @@ public class ClientGUI extends JFrame {
         
         JPanel boardPanel = new JPanel(new GridLayout(8, 8));
         boardPanel.setPreferredSize(new Dimension(600, 600));
-        boardPanel.setBorder(BorderFactory.createLineBorder(new Color(60, 60, 68), 2));
+        boardPanel.setBackground(BG_COLOR);
         
         for (int r = 7; r >= 0; r--) {
             for (int c = 0; c < 8; c++) {
                 JButton btn = new JButton();
-                btn.setFont(new Font("SansSerif", Font.PLAIN, 42));
+                btn.setFont(new Font("SansSerif", Font.PLAIN, 46));
                 btn.setFocusPainted(false);
                 btn.setBorderPainted(false);
                 btn.setOpaque(true);
@@ -267,14 +284,23 @@ public class ClientGUI extends JFrame {
         String coord = "" + (char)('a' + c) + (r + 1);
         if (selectedSquare == null) {
             selectedSquare = coord;
+            boardSquares[r][c].setBorder(BorderFactory.createLineBorder(Color.RED, 3));
+            boardSquares[r][c].setBorderPainted(true);
         } else {
             send("MOVE:" + selectedSquare + ":" + coord);
+            // reset borders
+            for(int i=0; i<8; i++){
+                for(int j=0; j<8; j++){
+                    boardSquares[i][j].setBorderPainted(false);
+                }
+            }
             selectedSquare = null;
         }
     }
 
     private JTextField createModernTextField(String placeholder) {
-        JTextField tf = new JTextField();
+        JTextField tf = new JTextField(placeholder);
+        tf.setPreferredSize(new Dimension(300, 40));
         tf.setMaximumSize(new Dimension(300, 40));
         tf.setFont(new Font("SansSerif", Font.PLAIN, 16));
         tf.setBackground(new Color(50, 50, 58));
@@ -284,6 +310,14 @@ public class ClientGUI extends JFrame {
             BorderFactory.createLineBorder(new Color(70, 70, 80)),
             new EmptyBorder(5, 10, 5, 10)
         ));
+        tf.setAlignmentX(Component.CENTER_ALIGNMENT);
+        tf.addFocusListener(new java.awt.event.FocusAdapter() {
+            public void focusGained(java.awt.event.FocusEvent evt) {
+                if (tf.getText().equals(placeholder)) {
+                    tf.setText("");
+                }
+            }
+        });
         return tf;
     }
     
@@ -295,6 +329,8 @@ public class ClientGUI extends JFrame {
         btn.setFocusPainted(false);
         btn.setBorderPainted(false);
         btn.setOpaque(true);
+        btn.setAlignmentX(Component.CENTER_ALIGNMENT);
+        btn.setPreferredSize(new Dimension(300, 40));
         btn.setMaximumSize(new Dimension(300, 40));
         btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
         return btn;
@@ -302,7 +338,8 @@ public class ClientGUI extends JFrame {
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
-            new ClientGUI().setVisible(true);
+            ClientGUI gui = new ClientGUI();
+            gui.setVisible(true);
         });
     }
 }
