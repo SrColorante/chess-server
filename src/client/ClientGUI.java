@@ -1,5 +1,6 @@
 package client;
 
+import com.formdev.flatlaf.FlatDarkLaf;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
@@ -10,11 +11,6 @@ import java.util.Map;
 
 public class ClientGUI extends JFrame {
     
-    // Modern UI Constants
-    private static final Color BG_COLOR = new Color(30, 30, 34);
-    private static final Color SURFACE_COLOR = new Color(42, 42, 48);
-    private static final Color PRIMARY_COLOR = new Color(74, 144, 226);
-    private static final Color TEXT_PRIMARY = new Color(240, 240, 240);
     private static final Color BOARD_LIGHT = new Color(238, 238, 210);
     private static final Color BOARD_DARK = new Color(118, 150, 86);
     
@@ -34,23 +30,15 @@ public class ClientGUI extends JFrame {
     private Map<String, String> pieceUnicodeMap = new HashMap<>();
 
     public ClientGUI() {
-        super("Modern Chess Client");
-        
-        try {
-            UIManager.setLookAndFeel(UIManager.getCrossPlatformLookAndFeelClassName());
-        } catch (Exception e) {}
-
+        super("Chess Multiplayer");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setSize(900, 750);
         setLocationRelativeTo(null);
-        getContentPane().setBackground(BG_COLOR);
         
         initUnicodeMap();
         
         cardLayout = new CardLayout();
         mainContainer = new JPanel(cardLayout);
-        mainContainer.setBackground(BG_COLOR);
-        mainContainer.setOpaque(true);
         
         mainContainer.add(createAuthPanel(), "AUTH");
         mainContainer.add(createLobbyPanel(), "LOBBY");
@@ -98,7 +86,7 @@ public class ClientGUI extends JFrame {
     }
     
     private void showErrorPopup(String msg) {
-        JOptionPane.showMessageDialog(this, msg, "Error", JOptionPane.ERROR_MESSAGE);
+        JOptionPane.showMessageDialog(this, msg, "Information", JOptionPane.INFORMATION_MESSAGE);
     }
     
     private void send(String cmd) {
@@ -120,7 +108,7 @@ public class ClientGUI extends JFrame {
                     cardLayout.show(mainContainer, "GAME");
                 } else if (line.startsWith("ASSIGNED_COLOR:")) {
                     myColor = line.substring(15).trim();
-                    setTitle("Modern Chess - Playing as " + myColor);
+                    setTitle("Chess - Playing as " + myColor);
                 } else if (line.startsWith("BOARD:")) {
                     updateBoardFromNetwork();
                 } else if (line.startsWith("MOVE_ERROR:")) {
@@ -160,91 +148,103 @@ public class ClientGUI extends JFrame {
 
     private JPanel createAuthPanel() {
         JPanel panel = new JPanel(new GridBagLayout());
-        panel.setBackground(BG_COLOR);
-        panel.setOpaque(true);
         
         JPanel card = new JPanel();
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
-        card.setBackground(SURFACE_COLOR);
-        card.setOpaque(true);
-        card.setBorder(new EmptyBorder(40, 40, 40, 40));
+        card.setBorder(new EmptyBorder(50, 60, 50, 60));
         
-        JLabel title = new JLabel("Chess Server");
-        title.setFont(new Font("SansSerif", Font.BOLD, 28));
-        title.setForeground(TEXT_PRIMARY);
+        // Let FlatLaf know this is a card/panel
+        card.putClientProperty("FlatLaf.styleClass", "card");
+        
+        JLabel title = new JLabel("Welcome");
+        title.putClientProperty("FlatLaf.styleClass", "h1");
         title.setAlignmentX(Component.CENTER_ALIGNMENT);
         
-        JTextField userField = createModernTextField("Username");
-        JPasswordField passField = new JPasswordField();
-        passField.setPreferredSize(new Dimension(300, 40));
-        passField.setMaximumSize(new Dimension(300, 40));
+        JTextField userField = new JTextField();
+        userField.putClientProperty("JTextField.placeholderText", "Username");
+        userField.putClientProperty("JComponent.roundRect", true);
+        userField.setPreferredSize(new Dimension(250, 45));
         
-        JButton btnLogin = createModernButton("Login", PRIMARY_COLOR);
+        JPasswordField passField = new JPasswordField();
+        passField.putClientProperty("JTextField.placeholderText", "Password");
+        passField.putClientProperty("JComponent.roundRect", true);
+        passField.setPreferredSize(new Dimension(250, 45));
+        
+        JButton btnLogin = new JButton("Login");
+        btnLogin.putClientProperty("JButton.buttonType", "roundRect");
+        btnLogin.setBackground(UIManager.getColor("Actions.Blue"));
+        btnLogin.setForeground(Color.WHITE);
+        btnLogin.setPreferredSize(new Dimension(250, 45));
         btnLogin.addActionListener(e -> send("LOGIN:" + userField.getText() + ":" + new String(passField.getPassword())));
         
-        JButton btnGuest = createModernButton("Play as Guest", new Color(100, 100, 100));
+        JButton btnGuest = new JButton("Play as Guest");
+        btnGuest.putClientProperty("JButton.buttonType", "roundRect");
+        btnGuest.setPreferredSize(new Dimension(250, 45));
         btnGuest.addActionListener(e -> send("GUEST:Guest_" + (int)(Math.random()*1000)));
         
         card.add(title);
         card.add(Box.createRigidArea(new Dimension(0, 30)));
         card.add(userField);
-        card.add(Box.createRigidArea(new Dimension(0, 10)));
+        card.add(Box.createRigidArea(new Dimension(0, 15)));
         card.add(passField);
-        card.add(Box.createRigidArea(new Dimension(0, 20)));
+        card.add(Box.createRigidArea(new Dimension(0, 30)));
         card.add(btnLogin);
-        card.add(Box.createRigidArea(new Dimension(0, 10)));
+        card.add(Box.createRigidArea(new Dimension(0, 15)));
         card.add(btnGuest);
         
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.gridx = 0; gbc.gridy = 0;
-        panel.add(card, gbc);
+        panel.add(card);
         return panel;
     }
 
     private JPanel createLobbyPanel() {
         JPanel panel = new JPanel(new GridBagLayout());
-        panel.setBackground(BG_COLOR);
         
         JPanel card = new JPanel();
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
-        card.setBackground(SURFACE_COLOR);
-        card.setOpaque(true);
-        card.setBorder(new EmptyBorder(40, 40, 40, 40));
+        card.setBorder(new EmptyBorder(50, 60, 50, 60));
+        card.putClientProperty("FlatLaf.styleClass", "card");
         
-        JButton btnCreate = createModernButton("Create Public Room", PRIMARY_COLOR);
+        JLabel title = new JLabel("Lobby");
+        title.putClientProperty("FlatLaf.styleClass", "h2");
+        title.setAlignmentX(Component.CENTER_ALIGNMENT);
+        
+        JButton btnCreate = new JButton("Create Room");
+        btnCreate.putClientProperty("JButton.buttonType", "roundRect");
+        btnCreate.setBackground(UIManager.getColor("Actions.Blue"));
+        btnCreate.setForeground(Color.WHITE);
+        btnCreate.setPreferredSize(new Dimension(250, 45));
         btnCreate.addActionListener(e -> send("CREATE_ROOM:Match:false"));
         
-        JTextField codeField = createModernTextField("Enter Room Code");
-        JButton btnJoin = createModernButton("Join Room", new Color(100, 100, 100));
+        JTextField codeField = new JTextField();
+        codeField.putClientProperty("JTextField.placeholderText", "Room Code");
+        codeField.putClientProperty("JComponent.roundRect", true);
+        codeField.setPreferredSize(new Dimension(250, 45));
+        
+        JButton btnJoin = new JButton("Join Room");
+        btnJoin.putClientProperty("JButton.buttonType", "roundRect");
+        btnJoin.setPreferredSize(new Dimension(250, 45));
         btnJoin.addActionListener(e -> send("JOIN_ROOM:" + codeField.getText()));
         
-        card.add(btnCreate);
+        card.add(title);
         card.add(Box.createRigidArea(new Dimension(0, 30)));
-        
-        JLabel lbl = new JLabel("Or join existing:");
-        lbl.setForeground(TEXT_PRIMARY);
-        lbl.setAlignmentX(Component.CENTER_ALIGNMENT);
-        card.add(lbl);
-        
+        card.add(btnCreate);
+        card.add(Box.createRigidArea(new Dimension(0, 40)));
+        card.add(new JLabel("Or join existing:"));
         card.add(Box.createRigidArea(new Dimension(0, 10)));
         card.add(codeField);
-        card.add(Box.createRigidArea(new Dimension(0, 10)));
+        card.add(Box.createRigidArea(new Dimension(0, 15)));
         card.add(btnJoin);
         
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.gridx = 0; gbc.gridy = 0;
-        panel.add(card, gbc);
+        panel.add(card);
         return panel;
     }
 
     private JPanel createGamePanel() {
         JPanel panel = new JPanel(new BorderLayout(20, 20));
-        panel.setBackground(BG_COLOR);
         panel.setBorder(new EmptyBorder(20, 20, 20, 20));
         
         JPanel boardPanel = new JPanel(new GridLayout(8, 8));
         boardPanel.setPreferredSize(new Dimension(600, 600));
-        boardPanel.setBackground(BG_COLOR);
         
         for (int r = 7; r >= 0; r--) {
             for (int c = 0; c < 8; c++) {
@@ -252,8 +252,8 @@ public class ClientGUI extends JFrame {
                 btn.setFont(new Font("SansSerif", Font.PLAIN, 46));
                 btn.setFocusPainted(false);
                 btn.setBorderPainted(false);
-                btn.setOpaque(true);
                 btn.setBackground((r + c) % 2 != 0 ? BOARD_LIGHT : BOARD_DARK);
+                btn.putClientProperty("JButton.buttonType", "square");
                 
                 final int finalR = r;
                 final int finalC = c;
@@ -266,10 +266,13 @@ public class ClientGUI extends JFrame {
         
         JPanel sidePanel = new JPanel();
         sidePanel.setLayout(new BoxLayout(sidePanel, BoxLayout.Y_AXIS));
-        sidePanel.setBackground(BG_COLOR);
         sidePanel.setPreferredSize(new Dimension(200, 600));
         
-        JButton btnResign = createModernButton("Resign", new Color(220, 53, 69));
+        JButton btnResign = new JButton("Resign");
+        btnResign.putClientProperty("JButton.buttonType", "roundRect");
+        btnResign.setBackground(UIManager.getColor("Actions.Red"));
+        btnResign.setForeground(Color.WHITE);
+        btnResign.setPreferredSize(new Dimension(180, 45));
         btnResign.addActionListener(e -> send("RESIGN"));
         
         sidePanel.add(Box.createVerticalGlue());
@@ -284,13 +287,12 @@ public class ClientGUI extends JFrame {
         String coord = "" + (char)('a' + c) + (r + 1);
         if (selectedSquare == null) {
             selectedSquare = coord;
-            boardSquares[r][c].setBorder(BorderFactory.createLineBorder(Color.RED, 3));
+            boardSquares[r][c].setBorder(BorderFactory.createLineBorder(UIManager.getColor("Actions.Red"), 4));
             boardSquares[r][c].setBorderPainted(true);
         } else {
             send("MOVE:" + selectedSquare + ":" + coord);
-            // reset borders
-            for(int i=0; i<8; i++){
-                for(int j=0; j<8; j++){
+            for(int i=0; i<8; i++) {
+                for(int j=0; j<8; j++) {
                     boardSquares[i][j].setBorderPainted(false);
                 }
             }
@@ -298,45 +300,28 @@ public class ClientGUI extends JFrame {
         }
     }
 
-    private JTextField createModernTextField(String placeholder) {
-        JTextField tf = new JTextField(placeholder);
-        tf.setPreferredSize(new Dimension(300, 40));
-        tf.setMaximumSize(new Dimension(300, 40));
-        tf.setFont(new Font("SansSerif", Font.PLAIN, 16));
-        tf.setBackground(new Color(50, 50, 58));
-        tf.setForeground(TEXT_PRIMARY);
-        tf.setCaretColor(TEXT_PRIMARY);
-        tf.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(new Color(70, 70, 80)),
-            new EmptyBorder(5, 10, 5, 10)
-        ));
-        tf.setAlignmentX(Component.CENTER_ALIGNMENT);
-        tf.addFocusListener(new java.awt.event.FocusAdapter() {
-            public void focusGained(java.awt.event.FocusEvent evt) {
-                if (tf.getText().equals(placeholder)) {
-                    tf.setText("");
-                }
-            }
-        });
-        return tf;
-    }
-    
-    private JButton createModernButton(String text, Color bg) {
-        JButton btn = new JButton(text);
-        btn.setFont(new Font("SansSerif", Font.BOLD, 14));
-        btn.setForeground(Color.WHITE);
-        btn.setBackground(bg);
-        btn.setFocusPainted(false);
-        btn.setBorderPainted(false);
-        btn.setOpaque(true);
-        btn.setAlignmentX(Component.CENTER_ALIGNMENT);
-        btn.setPreferredSize(new Dimension(300, 40));
-        btn.setMaximumSize(new Dimension(300, 40));
-        btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        return btn;
-    }
-
     public static void main(String[] args) {
+        try {
+            // Load custom font Comfortaa
+            File fontFile = new File("lib/Comfortaa.ttf");
+            if (fontFile.exists()) {
+                Font comfortaa = Font.createFont(Font.TRUETYPE_FONT, fontFile);
+                GraphicsEnvironment.getLocalGraphicsEnvironment().registerFont(comfortaa);
+                UIManager.put("defaultFont", comfortaa.deriveFont(15f));
+            }
+            
+            // Set up modern FlatLaf
+            FlatDarkLaf.setup();
+            
+            // Global rounded corners
+            UIManager.put("Button.arc", 15);
+            UIManager.put("Component.arc", 15);
+            UIManager.put("TextComponent.arc", 15);
+            UIManager.put("Panel.arc", 20); // for cards
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
         SwingUtilities.invokeLater(() -> {
             ClientGUI gui = new ClientGUI();
             gui.setVisible(true);
