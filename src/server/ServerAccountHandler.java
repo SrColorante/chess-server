@@ -1,198 +1,142 @@
 package server;
 
-import java.security.GeneralSecurityException;
-import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.security.MessageDigest;
 import java.util.Base64;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Statement;
 
-/**
- * ServerAccountHandler manages user accounts with salted PBKDF2 password hashes.
- */
 public class ServerAccountHandler {
     private static final int SALT_BYTES = 16;
     private static final int HASH_BYTES = 32;
     private static final int PBKDF2_ITERATIONS = 120_000;
     private static final String PBKDF2_ALGO = "PBKDF2WithHmacSHA256";
-    private static final int MIN_USERNAME_LENGTH = 3;
-    private static final int MAX_USERNAME_LENGTH = 24;
     private static final int MIN_PASSWORD_LENGTH = 8;
-    private static final int MAX_PASSWORD_LENGTH = 128;
     private static final SecureRandom STATIC_RANDOM = new SecureRandom();
 
-    private static final PasswordRecord DUMMY_RECORD = buildDummyRecord();
+    private final String dbUrl;
+    private final String dbUser;
+    private final String dbPass;
 
-    private static class PasswordRecord {
-        final byte[] salt;
-        final byte[] hash;
+    public ServerAccountHandler() {
+        this.dbUrl = System.getenv("DB_URL") != null ? System.getenv("DB_URL") : "jdbc:postgresql://localhost:5432/chess";
+        this.dbUser = System.getenv("DB_USER") != null ? System.getenv("DB_USER") : "postgres";
+        this.dbPass = System.getenv("DB_PASS") != null ? System.getenv("DB_PASS") : "postgres";
 
-        PasswordRecord(byte[] salt, byte[] hash) {
-            this.salt = salt;
-            this.hash = hash;
-        }
-
-        String serialize() {
-            return Base64.getEncoder().encodeToString(salt) + ":" + Base64.getEncoder().encodeToString(hash);
-        }
-
-        static PasswordRecord deserialize(String encoded) {
-            if (encoded == null) return null;
-            String[] parts = encoded.split(":", 2);
-            if (parts.length != 2) return null;
-            try {
-                byte[] salt = Base64.getDecoder().decode(parts[0]);
-                byte[] hash = Base64.getDecoder().decode(parts[1]);
-                return new PasswordRecord(salt, hash);
-            } catch (IllegalArgumentException e) {
-                return null;
-            }
-        }
+        initDatabase();
     }
-
-    private static class AttemptState {
-        volatile int failedAttempts = 0;
-        volatile long blockedUntilMs = 0L;
-    }
-
-    private final SecureRandom secureRandom = new SecureRandom();
-    private final Map<String, String> userCredentials = new ConcurrentHashMap<>();
-    private final Map<String, AttemptState> loginAttempts = new ConcurrentHashMap<>();
-
-    public static String hashPassword(String password) {
-        byte[] salt = new byte[SALT_BYTES];
-        STATIC_RANDOM.nextBytes(salt);
-        return deriveRecord(password, salt).serialize();
-    }
-
-    private static PasswordRecord buildDummyRecord() {
-        byte[] salt = new byte[SALT_BYTES];
-        for (int i = 0; i < salt.length; i++) {
-            salt[i] = (byte) (i * 17 + 3);
-        }
-        return deriveRecord("dummy_password_for_timing_only", salt);
-    }
-
-    private PasswordRecord hashPasswordForStorage(String password) {
-        byte[] salt = new byte[SALT_BYTES];
-        secureRandom.nextBytes(salt);
-        return deriveRecord(password, salt);
-    }
-
-    private static PasswordRecord deriveRecord(String password, byte[] salt) {
+    
+    private void initDatabase() {
         try {
-            PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, PBKDF2_ITERATIONS, HASH_BYTES * 8);
-            byte[] hash;
-            try {
-                SecretKeyFactory skf = SecretKeyFactory.getInstance(PBKDF2_ALGO);
-                hash = skf.generateSecret(spec).getEncoded();
-            } finally {
-                spec.clearPassword();
+            Class.forName("org.postgresql.Driver");
+            try (Connection conn = getConnection();
+                 Statement stmt = conn.createStatement()) {
+                stmt.execute("CREATE TABLE IF NOT EXISTS chess_users (" +
+                        "username VARCHAR(24) PRIMARY KEY, " +
+                        "salt VARCHAR(64) NOT NULL, " +
+                        "password_hash VARCHAR(128) NOT NULL, " +
+                        "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+                System.out.println("[DB] Connected to PostgreSQL and verified 'chess_users' table.");
             }
-            return new PasswordRecord(salt, hash);
-        } catch (GeneralSecurityException e) {
-            throw new IllegalStateException("PBKDF2 algorithm not available", e);
+        } catch (Exception e) {
+            System.err.println("[DB] PostgreSQL init failed: " + e.getMessage() + ". Check DB_URL, DB_USER, DB_PASS.");
         }
     }
-
-    private static boolean isValidUsername(String username) {
-        if (username == null) return false;
-        String trimmed = username.trim();
-        if (trimmed.length() < MIN_USERNAME_LENGTH || trimmed.length() > MAX_USERNAME_LENGTH) return false;
-        for (int i = 0; i < trimmed.length(); i++) {
-            char c = trimmed.charAt(i);
-            boolean valid = Character.isLetterOrDigit(c) || c == '_' || c == '-';
-            if (!valid) return false;
-        }
-        return true;
-    }
-
-    private static boolean isValidPassword(String password) {
-        if (password == null) return false;
-        if (password.length() < MIN_PASSWORD_LENGTH || password.length() > MAX_PASSWORD_LENGTH) return false;
-        for (int i = 0; i < password.length(); i++) {
-            char c = password.charAt(i);
-            if (c == '\n' || c == '\r' || Character.isISOControl(c)) return false;
-        }
-        return true;
-    }
-
-    private static String normalizedUsername(String username) {
-        return username == null ? "" : username.trim();
+    
+    private Connection getConnection() throws java.sql.SQLException {
+        return DriverManager.getConnection(dbUrl, dbUser, dbPass);
     }
 
     public synchronized boolean register(String username, String password) {
-        if (!isValidUsername(username) || !isValidPassword(password)) {
+        if (password == null || password.length() < MIN_PASSWORD_LENGTH) return false;
+        
+        try (Connection conn = getConnection();
+             PreparedStatement checkStmt = conn.prepareStatement("SELECT username FROM chess_users WHERE username = ?")) {
+            
+            checkStmt.setString(1, username);
+            ResultSet rs = checkStmt.executeQuery();
+            if (rs.next()) {
+                return false; // Username taken
+            }
+            
+            byte[] salt = new byte[SALT_BYTES];
+            STATIC_RANDOM.nextBytes(salt);
+            byte[] hash = hashPassword(password.toCharArray(), salt);
+            if (hash == null) return false;
+            
+            String b64Salt = Base64.getEncoder().encodeToString(salt);
+            String b64Hash = Base64.getEncoder().encodeToString(hash);
+            
+            try (PreparedStatement insertStmt = conn.prepareStatement(
+                    "INSERT INTO chess_users (username, salt, password_hash) VALUES (?, ?, ?)")) {
+                insertStmt.setString(1, username);
+                insertStmt.setString(2, b64Salt);
+                insertStmt.setString(3, b64Hash);
+                insertStmt.executeUpdate();
+            }
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
             return false;
         }
-        String normalized = normalizedUsername(username);
-        if (userCredentials.containsKey(normalized)) {
-            return false;
-        }
-        userCredentials.put(normalized, hashPasswordForStorage(password).serialize());
-        loginAttempts.remove(normalized);
-        return true;
     }
 
     public boolean login(String username, String password) {
-        if (!isValidUsername(username) || !isValidPassword(password)) {
-            return false;
-        }
+        if (username == null || password == null) return false;
 
-        String normalized = normalizedUsername(username);
-        AttemptState state = loginAttempts.computeIfAbsent(normalized, key -> new AttemptState());
-        long now = System.currentTimeMillis();
-        if (state.blockedUntilMs > now) {
-            return false;
-        }
-
-        String encoded = userCredentials.get(normalized);
-        PasswordRecord record = PasswordRecord.deserialize(encoded);
-        if (record == null) {
-            record = DUMMY_RECORD;
-        }
-
-        PasswordRecord provided = deriveRecord(password, record.salt);
-        boolean exists = encoded != null;
-        boolean hashMatches = MessageDigest.isEqual(record.hash, provided.hash);
-        boolean success = exists && hashMatches;
-
-        if (success) {
-            state.failedAttempts = 0;
-            state.blockedUntilMs = 0L;
-            return true;
-        }
-
-        int failed = Math.min(state.failedAttempts + 1, 12);
-        state.failedAttempts = failed;
-        long backoffMillis = Math.min(1000L, (long) Math.pow(2, Math.max(0, failed - 3)) * 100L);
-        state.blockedUntilMs = now + backoffMillis;
-
-        if (backoffMillis > 0) {
-            try {
-                TimeUnit.MILLISECONDS.sleep(Math.min(backoffMillis, 150L));
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
+        try (Connection conn = getConnection();
+             PreparedStatement stmt = conn.prepareStatement("SELECT salt, password_hash FROM chess_users WHERE username = ?")) {
+            
+            stmt.setString(1, username);
+            ResultSet rs = stmt.executeQuery();
+            
+            if (!rs.next()) {
+                hashPassword("dummy".toCharArray(), new byte[SALT_BYTES]); // Prevent timing attacks
+                return false;
             }
+            
+            byte[] salt = Base64.getDecoder().decode(rs.getString("salt"));
+            byte[] storedHash = Base64.getDecoder().decode(rs.getString("password_hash"));
+            
+            byte[] computedHash = hashPassword(password.toCharArray(), salt);
+            if (computedHash == null) return false;
+
+            return MessageDigest.isEqual(storedHash, computedHash);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
         }
-        return false;
     }
 
     public synchronized boolean deleteAccount(String username, String password) {
-        String normalized = normalizedUsername(username);
-        if (login(normalized, password)) {
-            userCredentials.remove(normalized);
-            loginAttempts.remove(normalized);
-            return true;
+        if (!login(username, password)) {
+            return false;
         }
-        return false;
+        
+        try (Connection conn = getConnection();
+             PreparedStatement stmt = conn.prepareStatement("DELETE FROM chess_users WHERE username = ?")) {
+            stmt.setString(1, username);
+            return stmt.executeUpdate() > 0;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
     }
 
-    public boolean userExists(String username) {
-        if (!isValidUsername(username)) return false;
-        return userCredentials.containsKey(normalizedUsername(username));
+    private byte[] hashPassword(char[] password, byte[] salt) {
+        try {
+            PBEKeySpec spec = new PBEKeySpec(password, salt, PBKDF2_ITERATIONS, HASH_BYTES * 8);
+            SecretKeyFactory skf = SecretKeyFactory.getInstance(PBKDF2_ALGO);
+            return skf.generateSecret(spec).getEncoded();
+        } catch (Exception e) {
+            return null;
+        } finally {
+            for (int i = 0; i < password.length; i++) password[i] = '\0';
+        }
     }
 }
