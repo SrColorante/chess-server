@@ -12,12 +12,12 @@ import java.util.Map;
 public class ClientGUI extends JFrame {
     
     // VERCEL / APPLE AESTHETIC (cristianrenosto.party)
-    private static final Color BG_BLACK = new Color(5, 5, 5);         // #050505
-    private static final Color CARD_BLACK = new Color(10, 10, 10);    // #0a0a0a
-    private static final Color BORDER_COLOR = new Color(51, 51, 51);  // #333333
+    private static final Color BG_BLACK = new Color(5, 5, 5);         
+    private static final Color CARD_BLACK = new Color(10, 10, 10);    
+    private static final Color BORDER_COLOR = new Color(51, 51, 51);  
     
     private static final Color TEXT_WHITE = Color.WHITE;
-    private static final Color TEXT_GRAY = new Color(136, 136, 136);  // #888888
+    private static final Color TEXT_GRAY = new Color(136, 136, 136);  
     
     private static final Color BTN_PRIMARY_BG = Color.WHITE;
     private static final Color BTN_PRIMARY_FG = Color.BLACK;
@@ -35,7 +35,10 @@ public class ClientGUI extends JFrame {
     private String myColor = "";
     private LineListener listener;
     
-    // UI Elements for feedback
+    // Game/Lobby state
+    private String currentRoomCode = "";
+    private JLabel roomCodeDisplay;
+    
     private JButton[][] boardSquares = new JButton[8][8];
     private String selectedSquare = null;
     private JLabel statusLabel;
@@ -58,6 +61,7 @@ public class ClientGUI extends JFrame {
         
         mainContainer.add(createAuthPanel(), "AUTH");
         mainContainer.add(createLobbyPanel(), "LOBBY");
+        mainContainer.add(createHostSettingsPanel(), "SETTINGS");
         mainContainer.add(createGamePanel(), "GAME");
         
         add(mainContainer);
@@ -122,11 +126,24 @@ public class ClientGUI extends JFrame {
                     cardLayout.show(mainContainer, "LOBBY");
                 } else if (line.startsWith("AUTH_ERROR:")) {
                     showErrorPopup(line.substring(11));
-                } else if (line.startsWith("ROOM_CREATED:") || line.startsWith("JOIN_OK:")) {
+                } else if (line.startsWith("ROOM_CREATED:")) {
+                    // Format: ROOM_CREATED:name:code:private
+                    String[] parts = line.split(":");
+                    currentRoomCode = parts[2];
+                    if (roomCodeDisplay != null) {
+                        roomCodeDisplay.setText(currentRoomCode);
+                    }
+                    cardLayout.show(mainContainer, "SETTINGS");
+                } else if (line.startsWith("JOIN_OK:")) {
                     cardLayout.show(mainContainer, "GAME");
-                    statusLabel.setText("Waiting for opponent...");
+                    statusLabel.setText("Waiting for match start...");
                     logModel.clear();
                     logEvent("Joined room!");
+                } else if (line.startsWith("MATCH_START:")) {
+                    cardLayout.show(mainContainer, "GAME");
+                    statusLabel.setText("Match Started!");
+                    logModel.clear();
+                    logEvent(line.substring(12));
                 } else if (line.startsWith("ASSIGNED_COLOR:")) {
                     myColor = line.substring(15).trim();
                     logEvent("Playing as " + myColor);
@@ -146,6 +163,8 @@ public class ClientGUI extends JFrame {
                     send("PONG");
                 } else if (line.startsWith("INFO:")) {
                     logEvent(line.substring(5));
+                } else if (line.startsWith("ERROR:")) {
+                    showErrorPopup(line.substring(6));
                 }
             } catch (Exception ex) {
                 showErrorPopup("Error: " + ex.getMessage());
@@ -169,7 +188,7 @@ public class ClientGUI extends JFrame {
                     }
                 }
             }
-            in.readLine();
+            in.readLine(); // coords
             String turnLine = in.readLine();
             if (turnLine != null && turnLine.contains("Current Turn:")) {
                 String currentTurn = turnLine.split(":")[1].trim();
@@ -294,6 +313,71 @@ public class ClientGUI extends JFrame {
         wrapper.add(card);
         return wrapper;
     }
+    
+    private JPanel createHostSettingsPanel() {
+        JPanel wrapper = new JPanel(new GridBagLayout());
+        wrapper.setBackground(BG_BLACK);
+        
+        JPanel card = new JPanel();
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setBackground(CARD_BLACK);
+        card.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(BORDER_COLOR, 1, true),
+            new EmptyBorder(50, 60, 50, 60)
+        ));
+        
+        JLabel title = new JLabel("Match Settings");
+        title.setFont(title.getFont().deriveFont(Font.BOLD, 28f));
+        title.setForeground(TEXT_WHITE);
+        
+        JLabel codeLabel = new JLabel("Share this code with your opponent:");
+        codeLabel.setForeground(TEXT_GRAY);
+        
+        roomCodeDisplay = new JLabel("------");
+        roomCodeDisplay.setFont(roomCodeDisplay.getFont().deriveFont(Font.BOLD, 42f));
+        roomCodeDisplay.setForeground(BTN_PRIMARY_BG);
+        
+        // Mode Dropdown
+        JLabel modeLbl = new JLabel("Game Mode");
+        modeLbl.setForeground(TEXT_GRAY);
+        JComboBox<String> modeBox = new JComboBox<>(new String[]{"STANDARD", "RAPID", "BLITZ"});
+        modeBox.addActionListener(e -> send("SET_MODE:" + modeBox.getSelectedItem()));
+        
+        // Color Dropdown
+        JLabel colorLbl = new JLabel("Your Color");
+        colorLbl.setForeground(TEXT_GRAY);
+        JComboBox<String> colorBox = new JComboBox<>(new String[]{"RANDOM", "WHITE", "BLACK"});
+        colorBox.addActionListener(e -> send("SET_COLOR:" + colorBox.getSelectedItem()));
+        
+        // Timer Dropdown
+        JLabel timerLbl = new JLabel("Turn Time Limit (Seconds)");
+        timerLbl.setForeground(TEXT_GRAY);
+        JComboBox<String> timerBox = new JComboBox<>(new String[]{"300", "60", "15", "600"});
+        timerBox.addActionListener(e -> send("SET_TIMER:" + timerBox.getSelectedItem()));
+        
+        Component[] comps = {title, Box.createRigidArea(new Dimension(0,20)), 
+                             codeLabel, Box.createRigidArea(new Dimension(0,5)), roomCodeDisplay,
+                             Box.createRigidArea(new Dimension(0,40)),
+                             modeLbl, Box.createRigidArea(new Dimension(0,5)), modeBox,
+                             Box.createRigidArea(new Dimension(0,20)),
+                             colorLbl, Box.createRigidArea(new Dimension(0,5)), colorBox,
+                             Box.createRigidArea(new Dimension(0,20)),
+                             timerLbl, Box.createRigidArea(new Dimension(0,5)), timerBox};
+                             
+        for (Component c : comps) {
+            if (c instanceof JComponent) {
+                ((JComponent) c).setAlignmentX(Component.CENTER_ALIGNMENT);
+                if (c instanceof JComboBox) {
+                    ((JComponent) c).setMaximumSize(new Dimension(280, 40));
+                    ((JComponent) c).setPreferredSize(new Dimension(280, 40));
+                }
+            }
+            card.add(c);
+        }
+        
+        wrapper.add(card);
+        return wrapper;
+    }
 
     private JPanel createGamePanel() {
         JPanel wrapper = new JPanel(new BorderLayout(40, 0));
@@ -406,6 +490,8 @@ public class ClientGUI extends JFrame {
             UIManager.put("TextComponent.background", BG_BLACK);
             UIManager.put("ScrollBar.track", BG_BLACK);
             UIManager.put("ScrollBar.thumb", BORDER_COLOR);
+            UIManager.put("ComboBox.background", BG_BLACK);
+            UIManager.put("ComboBox.selectionBackground", CARD_BLACK);
         } catch (Exception e) {}
 
         SwingUtilities.invokeLater(() -> {
