@@ -11,12 +11,19 @@ import java.util.Map;
 
 public class ClientGUI extends JFrame {
     
-    // "Nero vivace" (Deep rich blue-gray)
-    private static final Color BG_COLOR = new Color(24, 24, 36);
-    private static final Color CARD_COLOR = new Color(36, 36, 50);
-    private static final Color ACCENT_COLOR = new Color(94, 129, 172);
-    private static final Color BOARD_LIGHT = new Color(229, 233, 240);
-    private static final Color BOARD_DARK = new Color(136, 154, 180);
+    // VERCEL / APPLE AESTHETIC (cristianrenosto.party)
+    private static final Color BG_BLACK = new Color(5, 5, 5);         // #050505
+    private static final Color CARD_BLACK = new Color(10, 10, 10);    // #0a0a0a
+    private static final Color BORDER_COLOR = new Color(51, 51, 51);  // #333333
+    
+    private static final Color TEXT_WHITE = Color.WHITE;
+    private static final Color TEXT_GRAY = new Color(136, 136, 136);  // #888888
+    
+    private static final Color BTN_PRIMARY_BG = Color.WHITE;
+    private static final Color BTN_PRIMARY_FG = Color.BLACK;
+    
+    private static final Color BOARD_LIGHT = new Color(30, 30, 30);
+    private static final Color BOARD_DARK = new Color(15, 15, 15);
     
     private CardLayout cardLayout;
     private JPanel mainContainer;
@@ -37,17 +44,17 @@ public class ClientGUI extends JFrame {
     private Map<String, String> pieceUnicodeMap = new HashMap<>();
 
     public ClientGUI() {
-        super("Chess Multiplayer");
+        super("Cristian.party Chess");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(950, 750);
+        setSize(1000, 750);
         setLocationRelativeTo(null);
-        getContentPane().setBackground(BG_COLOR);
+        getContentPane().setBackground(BG_BLACK);
         
         initUnicodeMap();
         
         cardLayout = new CardLayout();
         mainContainer = new JPanel(cardLayout);
-        mainContainer.setBackground(BG_COLOR);
+        mainContainer.setBackground(BG_BLACK);
         
         mainContainer.add(createAuthPanel(), "AUTH");
         mainContainer.add(createLobbyPanel(), "LOBBY");
@@ -77,7 +84,7 @@ public class ClientGUI extends JFrame {
                 out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
                 
                 String welcome = in.readLine();
-                if (welcome == null) throw new IOException("Server returned null on welcome");
+                if (welcome == null) throw new IOException("Server disconnected");
                 
                 listener = new LineListener(in, this::handleServerLine, () -> {
                     SwingUtilities.invokeLater(() -> {
@@ -95,22 +102,16 @@ public class ClientGUI extends JFrame {
     }
     
     private void showErrorPopup(String msg) {
-        JOptionPane.showMessageDialog(this, msg, "Information", JOptionPane.INFORMATION_MESSAGE);
+        JOptionPane.showMessageDialog(this, msg, "Message", JOptionPane.INFORMATION_MESSAGE);
     }
     
     private void send(String cmd) {
-        if (out != null) {
-            out.println(cmd);
-        } else {
-            showErrorPopup("Not connected to server!");
-        }
+        if (out != null) out.println(cmd);
     }
     
     private void logEvent(String msg) {
         SwingUtilities.invokeLater(() -> {
-            if (logModel != null) {
-                logModel.add(0, msg);
-            }
+            if (logModel != null) logModel.add(0, msg);
         });
     }
 
@@ -128,20 +129,18 @@ public class ClientGUI extends JFrame {
                     logEvent("Joined room!");
                 } else if (line.startsWith("ASSIGNED_COLOR:")) {
                     myColor = line.substring(15).trim();
-                    setTitle("Chess - Playing as " + myColor);
-                    logEvent("You are playing as " + myColor);
+                    logEvent("Playing as " + myColor);
                 } else if (line.startsWith("BOARD:")) {
                     updateBoardFromNetwork();
                 } else if (line.startsWith("MOVE_OK:")) {
                     logEvent("Moved: " + line.substring(8));
                 } else if (line.startsWith("MOVE_ERROR:")) {
-                    logEvent("Error: " + line.substring(11));
                     showErrorPopup(line.substring(11));
                 } else if (line.startsWith("GAME_OVER:")) {
                     String reason = line.substring(10);
                     logEvent("Game Over! " + reason);
                     statusLabel.setText("GAME OVER");
-                    JOptionPane.showMessageDialog(this, reason, "Game Over", JOptionPane.INFORMATION_MESSAGE);
+                    JOptionPane.showMessageDialog(this, reason);
                     cardLayout.show(mainContainer, "LOBBY");
                 } else if ("PING".equals(line)) {
                     send("PONG");
@@ -149,7 +148,7 @@ public class ClientGUI extends JFrame {
                     logEvent(line.substring(5));
                 }
             } catch (Exception ex) {
-                showErrorPopup("Error processing server message: " + ex.getMessage());
+                showErrorPopup("Error: " + ex.getMessage());
             }
         });
     }
@@ -166,43 +165,44 @@ public class ClientGUI extends JFrame {
                         btn.setText("");
                     } else {
                         btn.setText(pieceUnicodeMap.getOrDefault(p, p));
-                        btn.setForeground(Character.isUpperCase(p.charAt(0)) ? Color.WHITE : Color.BLACK);
+                        btn.setForeground(Character.isUpperCase(p.charAt(0)) ? Color.WHITE : new Color(140, 140, 140));
                     }
                 }
             }
-            // Read coordinate line
             in.readLine();
-            // Read Current Turn line
             String turnLine = in.readLine();
             if (turnLine != null && turnLine.contains("Current Turn:")) {
                 String currentTurn = turnLine.split(":")[1].trim();
                 boolean isMyTurn = currentTurn.equalsIgnoreCase(myColor);
                 if (isMyTurn) {
-                    statusLabel.setText("IT'S YOUR TURN");
-                    statusLabel.setForeground(new Color(163, 190, 140)); // green
+                    statusLabel.setText("Your Turn");
+                    statusLabel.setForeground(Color.WHITE);
                 } else {
-                    statusLabel.setText("OPPONENT'S TURN");
-                    statusLabel.setForeground(new Color(235, 203, 139)); // yellow
+                    statusLabel.setText("Opponent's Turn");
+                    statusLabel.setForeground(TEXT_GRAY);
                 }
             }
-        } catch (Exception e) {
-            logEvent("Error reading board.");
-        }
+        } catch (Exception e) {}
     }
 
     private JPanel createAuthPanel() {
         JPanel wrapper = new JPanel(new GridBagLayout());
-        wrapper.setBackground(BG_COLOR);
+        wrapper.setBackground(BG_BLACK);
         
         JPanel card = new JPanel();
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
-        card.setBackground(CARD_COLOR);
-        card.setBorder(new EmptyBorder(50, 50, 50, 50));
-        card.putClientProperty("FlatLaf.styleClass", "card");
+        card.setBackground(CARD_BLACK);
+        card.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(BORDER_COLOR, 1, true),
+            new EmptyBorder(60, 60, 60, 60)
+        ));
         
-        JLabel title = new JLabel("Chess Multiplayer");
-        title.setFont(title.getFont().deriveFont(28f));
-        title.setAlignmentX(Component.CENTER_ALIGNMENT);
+        JLabel title = new JLabel("Chess.");
+        title.setFont(title.getFont().deriveFont(Font.BOLD, 36f));
+        title.setForeground(TEXT_WHITE);
+        
+        JLabel subtitle = new JLabel("Minimalist, straight-to-the-point.");
+        subtitle.setForeground(TEXT_GRAY);
         
         JTextField userField = new JTextField();
         userField.putClientProperty("JTextField.placeholderText", "Username");
@@ -210,16 +210,19 @@ public class ClientGUI extends JFrame {
         JPasswordField passField = new JPasswordField();
         passField.putClientProperty("JTextField.placeholderText", "Password");
         
-        JButton btnLogin = new JButton("Login");
-        btnLogin.setBackground(ACCENT_COLOR);
-        btnLogin.setForeground(Color.WHITE);
+        JButton btnLogin = new JButton("Sign In");
+        btnLogin.setBackground(BTN_PRIMARY_BG);
+        btnLogin.setForeground(BTN_PRIMARY_FG);
         btnLogin.addActionListener(e -> send("LOGIN:" + userField.getText() + ":" + new String(passField.getPassword())));
         
         JButton btnGuest = new JButton("Play as Guest");
+        btnGuest.setBackground(CARD_BLACK);
+        btnGuest.setForeground(TEXT_WHITE);
+        btnGuest.setBorder(BorderFactory.createLineBorder(BORDER_COLOR, 1, true));
         btnGuest.addActionListener(e -> send("GUEST:Guest_" + (int)(Math.random()*1000)));
         
-        // Ensure strictly sized & centered elements
-        Component[] comps = {title, Box.createRigidArea(new Dimension(0,40)), userField, 
+        Component[] comps = {title, Box.createRigidArea(new Dimension(0,10)), subtitle,
+                             Box.createRigidArea(new Dimension(0,40)), userField, 
                              Box.createRigidArea(new Dimension(0,15)), passField, 
                              Box.createRigidArea(new Dimension(0,30)), btnLogin, 
                              Box.createRigidArea(new Dimension(0,15)), btnGuest};
@@ -228,8 +231,8 @@ public class ClientGUI extends JFrame {
             if (c instanceof JComponent) {
                 ((JComponent) c).setAlignmentX(Component.CENTER_ALIGNMENT);
                 if (c instanceof JTextField || c instanceof JButton) {
-                    ((JComponent) c).setMaximumSize(new Dimension(260, 45));
-                    ((JComponent) c).setPreferredSize(new Dimension(260, 45));
+                    ((JComponent) c).setMaximumSize(new Dimension(280, 45));
+                    ((JComponent) c).setPreferredSize(new Dimension(280, 45));
                 }
             }
             card.add(c);
@@ -241,29 +244,35 @@ public class ClientGUI extends JFrame {
 
     private JPanel createLobbyPanel() {
         JPanel wrapper = new JPanel(new GridBagLayout());
-        wrapper.setBackground(BG_COLOR);
+        wrapper.setBackground(BG_BLACK);
         
         JPanel card = new JPanel();
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
-        card.setBackground(CARD_COLOR);
-        card.setBorder(new EmptyBorder(50, 50, 50, 50));
-        card.putClientProperty("FlatLaf.styleClass", "card");
+        card.setBackground(CARD_BLACK);
+        card.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(BORDER_COLOR, 1, true),
+            new EmptyBorder(60, 60, 60, 60)
+        ));
         
-        JLabel title = new JLabel("Game Lobby");
-        title.setFont(title.getFont().deriveFont(28f));
+        JLabel title = new JLabel("Lobby");
+        title.setFont(title.getFont().deriveFont(Font.BOLD, 32f));
+        title.setForeground(TEXT_WHITE);
         
-        JButton btnCreate = new JButton("Create New Room");
-        btnCreate.setBackground(ACCENT_COLOR);
-        btnCreate.setForeground(Color.WHITE);
+        JButton btnCreate = new JButton("Create Match");
+        btnCreate.setBackground(BTN_PRIMARY_BG);
+        btnCreate.setForeground(BTN_PRIMARY_FG);
         btnCreate.addActionListener(e -> send("CREATE_ROOM:Match:false"));
         
-        JLabel lbl = new JLabel("Or join with a code:");
-        lbl.setForeground(new Color(180, 180, 200));
+        JLabel lbl = new JLabel("Or join with code");
+        lbl.setForeground(TEXT_GRAY);
         
         JTextField codeField = new JTextField();
-        codeField.putClientProperty("JTextField.placeholderText", "Room Code (e.g. A1B2C3)");
+        codeField.putClientProperty("JTextField.placeholderText", "Room Code");
         
-        JButton btnJoin = new JButton("Join Room");
+        JButton btnJoin = new JButton("Join Match");
+        btnJoin.setBackground(CARD_BLACK);
+        btnJoin.setForeground(TEXT_WHITE);
+        btnJoin.setBorder(BorderFactory.createLineBorder(BORDER_COLOR, 1, true));
         btnJoin.addActionListener(e -> send("JOIN_ROOM:" + codeField.getText()));
         
         Component[] comps = {title, Box.createRigidArea(new Dimension(0,40)), btnCreate, 
@@ -275,8 +284,8 @@ public class ClientGUI extends JFrame {
             if (c instanceof JComponent) {
                 ((JComponent) c).setAlignmentX(Component.CENTER_ALIGNMENT);
                 if (c instanceof JTextField || c instanceof JButton) {
-                    ((JComponent) c).setMaximumSize(new Dimension(260, 45));
-                    ((JComponent) c).setPreferredSize(new Dimension(260, 45));
+                    ((JComponent) c).setMaximumSize(new Dimension(280, 45));
+                    ((JComponent) c).setPreferredSize(new Dimension(280, 45));
                 }
             }
             card.add(c);
@@ -287,15 +296,14 @@ public class ClientGUI extends JFrame {
     }
 
     private JPanel createGamePanel() {
-        JPanel wrapper = new JPanel(new BorderLayout(20, 20));
-        wrapper.setBackground(BG_COLOR);
-        wrapper.setBorder(new EmptyBorder(25, 25, 25, 25));
+        JPanel wrapper = new JPanel(new BorderLayout(40, 0));
+        wrapper.setBackground(BG_BLACK);
+        wrapper.setBorder(new EmptyBorder(40, 40, 40, 40));
         
-        // Center: Chess Board
         JPanel boardPanel = new JPanel(new GridLayout(8, 8));
         boardPanel.setPreferredSize(new Dimension(600, 600));
-        boardPanel.setBackground(BG_COLOR);
-        boardPanel.setBorder(BorderFactory.createLineBorder(CARD_COLOR, 6, true));
+        boardPanel.setBackground(CARD_BLACK);
+        boardPanel.setBorder(BorderFactory.createLineBorder(BORDER_COLOR, 1, true));
         
         for (int r = 7; r >= 0; r--) {
             for (int c = 0; c < 8; c++) {
@@ -316,42 +324,46 @@ public class ClientGUI extends JFrame {
             }
         }
         
-        // East: Feedback and Logs
         JPanel sidePanel = new JPanel();
         sidePanel.setLayout(new BoxLayout(sidePanel, BoxLayout.Y_AXIS));
-        sidePanel.setBackground(BG_COLOR);
-        sidePanel.setPreferredSize(new Dimension(250, 600));
+        sidePanel.setBackground(BG_BLACK);
+        sidePanel.setPreferredSize(new Dimension(300, 600));
         
         statusLabel = new JLabel("Connecting...");
-        statusLabel.setFont(statusLabel.getFont().deriveFont(18f));
-        statusLabel.setForeground(Color.WHITE);
-        statusLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        statusLabel.setFont(statusLabel.getFont().deriveFont(Font.BOLD, 24f));
+        statusLabel.setForeground(TEXT_WHITE);
+        statusLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        
+        JLabel subtitle = new JLabel("Live match event log");
+        subtitle.setForeground(TEXT_GRAY);
+        subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
         
         logModel = new DefaultListModel<>();
         JList<String> logList = new JList<>(logModel);
-        logList.setBackground(CARD_COLOR);
-        logList.setForeground(new Color(200, 200, 220));
-        logList.setSelectionBackground(CARD_COLOR);
-        logList.setSelectionForeground(Color.WHITE);
+        logList.setBackground(CARD_BLACK);
+        logList.setForeground(TEXT_GRAY);
+        logList.setSelectionBackground(CARD_BLACK);
+        logList.setSelectionForeground(TEXT_WHITE);
         
         JScrollPane scrollPane = new JScrollPane(logList);
-        scrollPane.setBorder(BorderFactory.createEmptyBorder());
-        scrollPane.setAlignmentX(Component.CENTER_ALIGNMENT);
+        scrollPane.setBorder(BorderFactory.createLineBorder(BORDER_COLOR, 1, true));
+        scrollPane.setAlignmentX(Component.LEFT_ALIGNMENT);
         
-        JButton btnResign = new JButton("Resign");
-        btnResign.setBackground(new Color(191, 97, 106)); // Soft red
-        btnResign.setForeground(Color.WHITE);
-        btnResign.setMaximumSize(new Dimension(250, 45));
-        btnResign.setAlignmentX(Component.CENTER_ALIGNMENT);
+        JButton btnResign = new JButton("Resign Match");
+        btnResign.setBackground(CARD_BLACK);
+        btnResign.setForeground(TEXT_WHITE);
+        btnResign.setBorder(BorderFactory.createLineBorder(BORDER_COLOR, 1, true));
+        btnResign.setMaximumSize(new Dimension(300, 45));
+        btnResign.setAlignmentX(Component.LEFT_ALIGNMENT);
         btnResign.addActionListener(e -> send("RESIGN"));
         
-        sidePanel.add(Box.createRigidArea(new Dimension(0, 10)));
         sidePanel.add(statusLabel);
+        sidePanel.add(Box.createRigidArea(new Dimension(0, 5)));
+        sidePanel.add(subtitle);
         sidePanel.add(Box.createRigidArea(new Dimension(0, 20)));
         sidePanel.add(scrollPane);
         sidePanel.add(Box.createRigidArea(new Dimension(0, 20)));
         sidePanel.add(btnResign);
-        sidePanel.add(Box.createRigidArea(new Dimension(0, 10)));
         
         wrapper.add(boardPanel, BorderLayout.CENTER);
         wrapper.add(sidePanel, BorderLayout.EAST);
@@ -362,7 +374,7 @@ public class ClientGUI extends JFrame {
         String coord = "" + (char)('a' + c) + (r + 1);
         if (selectedSquare == null) {
             selectedSquare = coord;
-            boardSquares[r][c].setBorder(BorderFactory.createLineBorder(new Color(235, 203, 139), 4));
+            boardSquares[r][c].setBorder(BorderFactory.createLineBorder(TEXT_WHITE, 3));
             boardSquares[r][c].setBorderPainted(true);
         } else {
             send("MOVE:" + selectedSquare + ":" + coord);
@@ -384,13 +396,17 @@ public class ClientGUI extends JFrame {
                 UIManager.put("defaultFont", comfortaa.deriveFont(15f));
             }
             FlatDarkLaf.setup();
-            UIManager.put("Button.arc", 20);
-            UIManager.put("Component.arc", 20);
-            UIManager.put("TextComponent.arc", 20);
-            UIManager.put("Panel.arc", 20);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+            UIManager.put("Button.arc", 12);
+            UIManager.put("Component.arc", 12);
+            UIManager.put("TextComponent.arc", 12);
+            UIManager.put("Panel.arc", 12);
+            // Vercel style overrides
+            UIManager.put("Component.focusWidth", 1);
+            UIManager.put("Component.innerFocusWidth", 0);
+            UIManager.put("TextComponent.background", BG_BLACK);
+            UIManager.put("ScrollBar.track", BG_BLACK);
+            UIManager.put("ScrollBar.thumb", BORDER_COLOR);
+        } catch (Exception e) {}
 
         SwingUtilities.invokeLater(() -> {
             ClientGUI gui = new ClientGUI();
