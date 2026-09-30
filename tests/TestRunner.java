@@ -9,6 +9,7 @@ public class TestRunner {
             TestAccountHandler.run();
             TestRoomHandler.run();
             TestChessGame.run();
+            TestMatchFlow.run();
             TestNetworkIntegration.run();
             TestClientComponents.run();
             System.out.println("\n[✓] ALL CONTRACT & LOGIC TESTS PASSED SUCCESSFULLY!");
