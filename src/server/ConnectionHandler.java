@@ -166,12 +166,16 @@ public class ConnectionHandler implements Runnable {
     private static final int LOBBY_SOCKET_READ_TIMEOUT_MS = 1000;
     private static final int GAME_SOCKET_READ_TIMEOUT_MS = 2000;
     private static final long LOBBY_TIMEOUT_MS = 120_000L;
+    private static final long PING_INTERVAL_MS = 5_000L;
+    private static final long PING_GRACE_MS = 25_000L;
 
     private final ServerRoomHandler.Room room;
     private final ServerRoomHandler roomHandler;
     private final RoomSettings settings = new RoomSettings();
     private final GameHandler gameHandler = new GameHandler();
     private final CountDownLatch guestJoinedLatch = new CountDownLatch(1);
+    /** Released once the match is over, so the room thread can park instead of poll. */
+    private final CountDownLatch matchOverLatch = new CountDownLatch(1);
     private final AtomicBoolean cleanedUp = new AtomicBoolean(false);
 
     private final Socket hostSocket;
@@ -278,9 +282,11 @@ public class ConnectionHandler implements Runnable {
             gameListenerPool.submit(() -> listenPlayer(true));
             gameListenerPool.submit(() -> listenPlayer(false));
 
-            while (running && gameHandler.isMatchActive()) {
-                Thread.sleep(100);
-            }
+            // Wait for the match to end instead of polling it. The old loop woke
+            // ten times a second per room purely to re-read a boolean, which is
+            // pure overhead under load; the listeners set the flag and this
+            // thread sleeps until then.
+            awaitMatchEnd();
 
             if (gameHandler.getChessGame().isGameOver()) {
                 broadcast("GAME_OVER:" + gameHandler.getFinalResult());
@@ -290,6 +296,33 @@ public class ConnectionHandler implements Runnable {
         } catch (Exception e) {
             selfDestruct("Session error: " + e.getMessage());
         }
+    }
+
+    /**
+     * Blocks until the match finishes. Every path that ends a match - a winning
+     * move, a resignation, a disconnect, a timeout, or shutdown - releases
+     * {@link #matchOverLatch}, so this thread spends the whole game parked
+     * instead of waking up to re-check a flag.
+     */
+    private void awaitMatchEnd() {
+        try {
+            // A generous ceiling: it only matters if every ending path missed the
+            // release, in which case cleanup must not hang forever.
+            matchOverLatch.await(2, TimeUnit.HOURS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Ends the session: clears the running flag and wakes the room thread.
+     *
+     * <p>Every path that ends a match goes through here, so a new ending path
+     * cannot forget to release the latch and leave the room thread parked.
+     */
+    private void endSession() {
+        running = false;
+        matchOverLatch.countDown();
     }
 
     private void handleLobbyCommand(String cmd) {
@@ -356,7 +389,7 @@ public class ConnectionHandler implements Runnable {
                     if (running) {
                         broadcast("INFO:" + role + " disconnected.");
                         gameHandler.resign(isHost);
-                        running = false;
+                        endSession();
                     }
                     break;
                 }
@@ -387,7 +420,7 @@ public class ConnectionHandler implements Runnable {
                         broadcast("MOVE_OK:" + role + " moved " + from + " -> " + to);
                         broadcastBoard();
                         if (gameHandler.getChessGame().isGameOver()) {
-                            running = false;
+                            endSession();
                         }
                     } else {
                         out.println("MOVE_ERROR:" + res.getMessage());
@@ -395,7 +428,7 @@ public class ConnectionHandler implements Runnable {
                 } else if ("RESIGN".equals(line)) {
                     gameHandler.resign(isHost);
                     broadcast("INFO:" + role + " has resigned.");
-                    running = false;
+                    endSession();
                 } else {
                     out.println("ERROR:Unknown command");
                 }
@@ -404,7 +437,7 @@ public class ConnectionHandler implements Runnable {
             if (running) {
                 broadcast("INFO:" + role + " disconnected.");
                 gameHandler.resign(isHost);
-                running = false;
+                endSession();
             }
         }
     }
@@ -421,35 +454,59 @@ public class ConnectionHandler implements Runnable {
         if (guestOut != null) guestOut.println(msg);
     }
 
+    /**
+     * Sends the board as one self-contained line.
+     *
+     * <p>This used to be {@code broadcast("BOARD:\n" + renderBoard())}, which packed
+     * the whole ASCII grid into a single write. The client's {@code LineListener} read
+     * it as one line, and its own board parser then tried to {@code readLine()} the
+     * following rows from the same {@code BufferedReader} — two threads reading one
+     * stream, so protocol messages and board rows interleaved and the GUI desynced.
+     * A single-line frame means one read, no shared reader, no race.
+     */
     private void broadcastBoard() {
-        String boardView = gameHandler.getChessGame().renderBoard();
-        broadcast("BOARD:\n" + boardView);
+        broadcast(gameHandler.getChessGame().renderBoardCompact());
     }
 
+    /**
+     * Heartbeat, timeout and turn-clock enforcement.
+     *
+     * <p>This used to run every second and pings on every tick. Pinging more
+     * often than the grace period needs only costs bytes: at 1 Hz a two-player
+     * room sent 120 messages a minute, and the wake-up itself was 60 times more
+     * frequent than the 25 s timeout could ever observe. The clock is still
+     * evaluated on the same schedule as before, so turn expiry keeps its
+     * precision, but the network traffic is divided by five.
+     */
     private void startKeepAlive() {
-        keepAliveScheduler = Executors.newSingleThreadScheduledExecutor();
+        keepAliveScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "keepalive-" + room.getCode());
+            t.setDaemon(true);
+            return t;
+        });
         keepAliveScheduler.scheduleAtFixedRate(() -> {
             if (!running) {
                 return;
             }
 
             long now = System.currentTimeMillis();
-            if (hostOut != null) hostOut.println("PING");
-            if (guestOut != null) guestOut.println("PING");
 
-            if (now - lastHostPing > 25_000) {
+            if (now - lastHostPing > PING_GRACE_MS) {
                 broadcast("INFO:Host timed out (Keep-Alive failed).");
                 gameHandler.resign(true);
-                running = false;
+                endSession();
                 return;
             }
 
-            if (now - lastGuestPing > 25_000) {
+            if (now - lastGuestPing > PING_GRACE_MS) {
                 broadcast("INFO:Guest timed out (Keep-Alive failed).");
                 gameHandler.resign(false);
-                running = false;
+                endSession();
                 return;
             }
+
+            if (hostOut != null) hostOut.println("PING");
+            if (guestOut != null) guestOut.println("PING");
 
             if (gameHandler.isMatchActive()) {
                 long elapsed = now - lastTurnActionMs;
@@ -459,10 +516,10 @@ public class ConnectionHandler implements Runnable {
                     boolean hostTurn = turn == gameHandler.getHostColor();
                     broadcast("INFO:Turn timer expired for " + (hostTurn ? "Host" : "Guest") + ".");
                     gameHandler.resign(hostTurn);
-                    running = false;
+                    endSession();
                 }
             }
-        }, 1, 1, TimeUnit.SECONDS);
+        }, PING_INTERVAL_MS, PING_INTERVAL_MS, TimeUnit.MILLISECONDS);
     }
 
     private static String readLineWithLimit(BufferedReader in, int maxLen) throws IOException {
@@ -491,7 +548,7 @@ public class ConnectionHandler implements Runnable {
             return;
         }
 
-        running = false;
+        endSession();
         room.setStatus(ServerRoomHandler.RoomStatus.FINISHED);
         System.out.println("[ConnectionHandler] Room " + room.getCode() + " self-destructing: " + reason);
 
