@@ -237,3 +237,62 @@ dependencies**. No application code imports them; `neon.ts` is a 3-line
 | File | Content |
 |---|---|
 | [`docs.md`](./docs.md) | Protocol reference, engine internals, concurrency model, deployment, test suite detail |
+
+## Further reading
+
+External material covering the same ground. The cross-repo map, with the same
+links for all seven projects, is in `~/Progetti/RESOURCES.md`.
+
+### Build it from scratch
+
+- [Beej's Guide to Network Programming](http://beej.us/guide/bgnet/) — the
+  canonical explanation of why one socket read is not one message, which is the
+  whole reason this project defines a newline-delimited `KEY:payload` protocol
+  instead of assuming frame boundaries.
+- [Code a 2D Game Engine using Java — Full Course for Beginners](https://www.youtube.com/watch?v=025QFeZfeyM)
+  *(video)* — the closest published analogue to `ChessGame.java`.
+- [Chess Engine In C](https://www.youtube.com/playlist?list=PLZ1QII7yudbc-Ky058TEaOstZHVbT-2hg)
+  *(video)* — move generation and perft.
+- [Building Your Own Kafka-like System From Scratch](https://github.com/buildthingsuseful/build-your-own-kafka)
+  *(Java)* — a published log with consumer groups, the shape the room registry
+  and matchmaking would need if state ever moved out of process.
+- [Let's Build a Simple Database](https://cstack.github.io/db_tutorial/) *(C)*
+  — background for the single-table schema and its idempotent creation at
+  startup.
+
+### System design
+
+The one server project in this set that [System Design
+Primer](https://github.com/donnemartin/system-design-primer) genuinely applies
+to. Every issue in the list above has a matching section:
+
+| Known issue | Primer section |
+|---|---|
+| Traffic is plaintext; TLS is not usable as shipped | [Security](https://github.com/donnemartin/system-design-primer#security) |
+| Game state is in-memory only; a restart destroys every room | [Availability patterns](https://github.com/donnemartin/system-design-primer#availability-patterns), [Replication](https://github.com/donnemartin/system-design-primer#replication) |
+| Deploy is a single Railway instance | [Load balancer](https://github.com/donnemartin/system-design-primer#load-balancer), [Scaling](https://github.com/donnemartin/system-design-primer#system-design-topics-start-here) |
+| One table, no persistence beyond accounts | [Database](https://github.com/donnemartin/system-design-primer#database) |
+| `SET_TIMER` is echoed but not broadcast | [Consistency patterns](https://github.com/donnemartin/system-design-primer#consistency-patterns) |
+
+Interview drills: [design a web crawler](https://github.com/donnemartin/system-design-primer#design-a-web-crawler)
+and [design a key-value store for a search engine](https://github.com/donnemartin/system-design-primer#design-a-key-value-store-for-a-search-engine).
+
+### Books
+
+- [Google's Java Style Guide](https://google.github.io/styleguide/javaguide.html)
+- [Introduction to Programming Using Java](https://math.hws.edu/javanotes) — David J. Eck, with exercises
+- [A Practical Introduction to Data Structures and Algorithm Analysis, Java version](https://people.cs.vt.edu/shaffer/Book/Java3e20100119.pdf) — Clifford A. Shaffer
+- [PostgreSQL Tutorial](https://www.tutorialspoint.com/postgresql/) — for the accounts schema
+
+### Reference
+
+- [roadmap.sh/java](https://roadmap.sh/java) · [system-design](https://roadmap.sh/system-design) · [postgresql-dba](https://roadmap.sh/postgresql-dba) · [computer-science](https://roadmap.sh/computer-science)
+- [Awesome Java](https://github.com/akullpp/awesome-java) ·
+  [Awesome Postgres](https://github.com/dhamaniasad/awesome-postgres) ·
+  [Awesome Chess](https://github.com/hkirat/awesome-chess) ·
+  [Awesome Code Review](https://github.com/joho/awesome-code-review) ·
+  [Awesome Testing](https://github.com/TheJambo/awesome-testing)
+- [Project-based learning, Java section](https://github.com/practical-tutorials/project-based-learning#java):
+  [Build a Simple HTTP Server with Java](http://javarevisited.blogspot.com/2015/06/how-to-create-http-server-in-java-serversocket-example.html) ·
+  [concurrent servers](https://eli.thegreenplace.net/2017/concurrent-servers-part-1-introduction/) (six parts, threads then event-driven) ·
+  [MQTT broker from scratch](https://codepr.github.io/posts/sol-mqtt-broker).
