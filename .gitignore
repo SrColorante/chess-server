@@ -4,3 +4,4 @@ repair_prompt.txt
 worker_prompt.txt
 .neon
 .env.local
+node_modules/
