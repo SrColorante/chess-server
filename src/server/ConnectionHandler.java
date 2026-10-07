@@ -261,6 +261,10 @@ public class ConnectionHandler implements Runnable {
                     handleLobbyCommand(line);
                 } catch (SocketTimeoutException ignored) {
                     // periodic wake-up for latch/timeout checks
+                } catch (LineTooLongException tooLong) {
+                    // Same reasoning as in listenPlayer: reject the command, not
+                    // the room. The host is still in the lobby setting up a match.
+                    hostOut.println("ERROR:Message too long (max " + MAX_MESSAGE_LENGTH + " bytes)");
                 }
             }
 
@@ -382,6 +386,13 @@ public class ConnectionHandler implements Runnable {
                 try {
                     line = readLineWithLimit(in, MAX_MESSAGE_LENGTH);
                 } catch (SocketTimeoutException timeout) {
+                    continue;
+                } catch (LineTooLongException tooLong) {
+                    // A malformed line is the sender's problem, not a reason to
+                    // hand the game to the opponent. Answer and keep reading:
+                    // this used to fall through to the IOException handler below,
+                    // which resigned the sender and ended a perfectly live match.
+                    out.println("ERROR:Message too long (max " + MAX_MESSAGE_LENGTH + " bytes)");
                     continue;
                 }
 
@@ -522,25 +533,55 @@ public class ConnectionHandler implements Runnable {
         }, PING_INTERVAL_MS, PING_INTERVAL_MS, TimeUnit.MILLISECONDS);
     }
 
+    /**
+     * A line that exceeded {@link #MAX_MESSAGE_LENGTH}.
+     *
+     * <p>Distinct from a generic {@link IOException} on purpose: an over-long
+     * line is a client protocol error, not a broken connection, so callers
+     * answer it with an error frame and keep the session alive. Conflating the
+     * two is what used to let a single oversized line end a live match - see
+     * {@link #listenPlayer}.
+     */
+    public static final class LineTooLongException extends IOException {
+        LineTooLongException(int maxLen) {
+            super("Input line exceeds " + maxLen + " bytes");
+        }
+    }
+
+    /**
+     * Reads one line, refusing anything longer than {@code maxLen} bytes.
+     *
+     * <p>On overflow the remainder of the line is drained up to the newline
+     * before the error is raised. Without that drain the tail would be left in
+     * the buffer and parsed as a fresh command on the next read, which would
+     * turn one bad line into an unpredictable command injection.
+     *
+     * @return the line, or null at end of stream
+     * @throws LineTooLongException if the line exceeded {@code maxLen}
+     */
     private static String readLineWithLimit(BufferedReader in, int maxLen) throws IOException {
         StringBuilder sb = new StringBuilder();
+        boolean overflow = false;
         while (true) {
             int ch = in.read();
             if (ch == -1) {
+                if (overflow) throw new LineTooLongException(maxLen);
                 if (sb.length() == 0) return null;
                 return sb.toString();
             }
             if (ch == '\n') {
-                break;
+                if (overflow) throw new LineTooLongException(maxLen);
+                return sb.toString();
             }
             if (ch != '\r') {
-                sb.append((char) ch);
-                if (sb.length() > maxLen) {
-                    throw new IOException("Input line too long");
+                if (sb.length() < maxLen) {
+                    sb.append((char) ch);
+                } else {
+                    // Keep reading to consume the rest of the line.
+                    overflow = true;
                 }
             }
         }
-        return sb.toString();
     }
 
     public synchronized void selfDestruct(String reason) {

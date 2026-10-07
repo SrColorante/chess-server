@@ -10,6 +10,7 @@ public class RunOne {
                 case "chess": TestChessGame.run(); break;
                 case "match": TestMatchFlow.run(); break;
                 case "network": TestNetworkIntegration.run(); break;
+                case "hardening": TestProtocolHardening.run(); break;
                 case "client": TestClientComponents.run(); break;
                 case "room": TestRoomHandler.run(); break;
                 default: throw new IllegalArgumentException("unknown: " + which);

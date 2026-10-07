@@ -11,6 +11,7 @@ public class TestRunner {
             TestChessGame.run();
             TestMatchFlow.run();
             TestNetworkIntegration.run();
+            TestProtocolHardening.run();
             TestClientComponents.run();
             System.out.println("\n[✓] ALL CONTRACT & LOGIC TESTS PASSED SUCCESSFULLY!");
             System.exit(0);

@@ -63,15 +63,15 @@ public class ServerAccountHandler {
             if (rs.next()) {
                 return false; // Username taken
             }
-            
+
             byte[] salt = new byte[SALT_BYTES];
             STATIC_RANDOM.nextBytes(salt);
             byte[] hash = hashPassword(password.toCharArray(), salt);
             if (hash == null) return false;
-            
+
             String b64Salt = Base64.getEncoder().encodeToString(salt);
             String b64Hash = Base64.getEncoder().encodeToString(hash);
-            
+
             try (PreparedStatement insertStmt = conn.prepareStatement(
                     "INSERT INTO chess_users (username, salt, password_hash) VALUES (?, ?, ?)")) {
                 insertStmt.setString(1, username);
@@ -81,7 +81,7 @@ public class ServerAccountHandler {
             }
             return true;
         } catch (Exception e) {
-            e.printStackTrace();
+            logDbFailure("register", e);
             return false;
         }
     }
@@ -108,7 +108,7 @@ public class ServerAccountHandler {
 
             return MessageDigest.isEqual(storedHash, computedHash);
         } catch (Exception e) {
-            e.printStackTrace();
+            logDbFailure("login", e);
             return false;
         }
     }
@@ -117,15 +117,29 @@ public class ServerAccountHandler {
         if (!login(username, password)) {
             return false;
         }
-        
+
         try (Connection conn = getConnection();
              PreparedStatement stmt = conn.prepareStatement("DELETE FROM chess_users WHERE username = ?")) {
             stmt.setString(1, username);
             return stmt.executeUpdate() > 0;
         } catch (Exception e) {
-            e.printStackTrace();
+            logDbFailure("deleteAccount", e);
             return false;
         }
+    }
+
+    /**
+     * Reports a database failure without dumping the driver's stack trace.
+     *
+     * <p>{@code printStackTrace} on a PostgreSQL failure prints the connection
+     * attempt, the host and the port to stdout, which lands in server.log on a
+     * hosted deploy. That is operational detail that does not belong in a log
+     * anyone can read, and it buried real failures under a wall of driver
+     * frames. The exception type is still recorded, so the cause is not lost.
+     */
+    private static void logDbFailure(String operation, Exception e) {
+        System.err.println("[DB] " + operation + " failed: " + e.getClass().getSimpleName()
+                + (e.getMessage() == null ? "" : " (" + e.getMessage() + ")"));
     }
 
     private byte[] hashPassword(char[] password, byte[] salt) {

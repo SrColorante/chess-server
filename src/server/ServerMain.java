@@ -28,9 +28,14 @@ public class ServerMain {
     private static final int AUTH_TIMEOUT_MS = 300_000;   // 5 minuti per autenticarsi
     private static final int LOBBY_TIMEOUT_MS = 600_000;  // 10 minuti in lobby
     private static final int MAX_CONNECTIONS = 128;
+    /** Failed LOGIN/REGISTER attempts allowed before the socket is dropped. */
+    private static final int MAX_AUTH_ATTEMPTS = 5;
     private static final int THREADS = Math.max(8, Runtime.getRuntime().availableProcessors() * 2);
     private static final String NAME_PATTERN = "^[A-Za-z0-9_-]{3,24}$";
     private static final String ROOM_NAME_PATTERN = "^[A-Za-z0-9 _-]{3,32}$";
+
+    /** Shared for guest nicknames; one instance per call was wasteful. */
+    private static final SecureRandom NICKNAME_RANDOM = new SecureRandom();
 
     public static void main(String[] args) {
         Server server = new Server(Server.DEFAULT_PORT, "Main Chess Server");
@@ -84,7 +89,12 @@ public class ServerMain {
         ServerSocketFactory factory = tlsEnabled
                 ? SSLServerSocketFactory.getDefault()
                 : ServerSocketFactory.getDefault();
-        return factory.createServerSocket(port);
+        ServerSocket socket = factory.createServerSocket(port);
+        // Survive a restart. Without SO_REUSEADDR a redeploy can fail to bind
+        // while the previous socket lingers in TIME_WAIT, which reads as a
+        // crash-loop cause rather than the transient state it is.
+        socket.setReuseAddress(true);
+        return socket;
     }
 
     private static void rejectConnection(Socket socket, String message) {
@@ -100,6 +110,11 @@ public class ServerMain {
         boolean handoffToRoomHandler = false;
         Socket managedSocket = socket;
         try {
+            // The client already sets this; without the matching flag on the
+            // server side, Nagle delayed small writes (the board frame after a
+            // move is ~78 bytes) while the reader waited, adding up to 200ms of
+            // pure delay to every move in a game.
+            managedSocket.setTcpNoDelay(true);
             managedSocket.setSoTimeout(AUTH_TIMEOUT_MS);
             BufferedReader in = new BufferedReader(new InputStreamReader(managedSocket.getInputStream()));
             PrintWriter out = new PrintWriter(new OutputStreamWriter(managedSocket.getOutputStream()), true);
@@ -108,10 +123,30 @@ public class ServerMain {
 
             String currentUser = null;
             boolean authenticated = false;
+            int failedAuthAttempts = 0;
 
             while (!authenticated) {
-                String line = readLineWithLimit(in, MAX_MESSAGE_LENGTH);
+                String line;
+                try {
+                    line = readLineWithLimit(in, MAX_MESSAGE_LENGTH);
+                } catch (LineTooLongException tooLong) {
+                    out.println("ERROR:Message too long (max " + MAX_MESSAGE_LENGTH + " bytes)");
+                    continue;
+                }
                 if (line == null) return;
+
+                if (line.startsWith("LOGIN:") || line.startsWith("REGISTER:")) {
+                    // Brute-force protection. PBKDF2 at 120k iterations is
+                    // deliberately expensive, so an unlimited retry loop is a
+                    // denial-of-service lever as much as a credential-guessing
+                    // one: a single socket could pin a core guessing forever.
+                    if (failedAuthAttempts >= MAX_AUTH_ATTEMPTS) {
+                        out.println("AUTH_ERROR:Too many failed attempts. Connection closing.");
+                        System.out.println("[ServerMain] Closing connection after "
+                                + MAX_AUTH_ATTEMPTS + " failed auth attempts");
+                        return;
+                    }
+                }
 
                 if (line.startsWith("LOGIN:")) {
                     String[] parts = line.split(":", 3);
@@ -120,6 +155,7 @@ public class ServerMain {
                         authenticated = true;
                         out.println("AUTH_OK:Logged in as " + currentUser);
                     } else {
+                        failedAuthAttempts++;
                         out.println("AUTH_ERROR:Invalid username or password");
                     }
                 } else if (line.startsWith("REGISTER:")) {
@@ -129,12 +165,13 @@ public class ServerMain {
                         authenticated = true;
                         out.println("AUTH_OK:Account created and logged in as " + currentUser);
                     } else {
+                        failedAuthAttempts++;
                         out.println("AUTH_ERROR:Registration failed");
                     }
                 } else if (line.startsWith("GUEST:")) {
                     String nick = line.length() > 6 ? line.substring(6).trim() : "";
                     if (nick.isEmpty()) {
-                        nick = "Guest_" + (new SecureRandom().nextInt(9000) + 1000);
+                        nick = "Guest_" + (NICKNAME_RANDOM.nextInt(9000) + 1000);
                     }
                     if (!validUsername(nick)) {
                         out.println("AUTH_ERROR:Invalid guest nickname");
@@ -157,7 +194,13 @@ public class ServerMain {
 
             managedSocket.setSoTimeout(LOBBY_TIMEOUT_MS);
             while (true) {
-                String line = readLineWithLimit(in, MAX_MESSAGE_LENGTH);
+                String line;
+                try {
+                    line = readLineWithLimit(in, MAX_MESSAGE_LENGTH);
+                } catch (LineTooLongException tooLong) {
+                    out.println("ERROR:Message too long (max " + MAX_MESSAGE_LENGTH + " bytes)");
+                    continue;
+                }
                 if (line == null) return;
 
                 if ("LIST_ROOMS".equals(line)) {
@@ -239,25 +282,47 @@ public class ServerMain {
         }
     }
 
+    /**
+     * A line that exceeded {@link #MAX_MESSAGE_LENGTH}. See
+     * {@link ConnectionHandler.LineTooLongException} for why this is not a
+     * generic {@link IOException}.
+     */
+    private static final class LineTooLongException extends IOException {
+        LineTooLongException(int maxLen) {
+            super("Input line exceeds " + maxLen + " bytes");
+        }
+    }
+
+    /**
+     * Reads one line, refusing anything longer than {@code maxLen} bytes.
+     *
+     * <p>Overflow drains the rest of the line first, so the tail is never left
+     * in the buffer to be re-read as a new command.
+     *
+     * @throws LineTooLongException if the line exceeded {@code maxLen}
+     */
     private static String readLineWithLimit(BufferedReader in, int maxLen) throws IOException {
         StringBuilder sb = new StringBuilder();
+        boolean overflow = false;
         while (true) {
             int ch = in.read();
             if (ch == -1) {
+                if (overflow) throw new LineTooLongException(maxLen);
                 if (sb.length() == 0) return null;
                 return sb.toString();
             }
             if (ch == '\n') {
-                break;
+                if (overflow) throw new LineTooLongException(maxLen);
+                return sb.toString();
             }
             if (ch != '\r') {
-                sb.append((char) ch);
-                if (sb.length() > maxLen) {
-                    throw new IOException("Input line too long");
+                if (sb.length() < maxLen) {
+                    sb.append((char) ch);
+                } else {
+                    overflow = true;
                 }
             }
         }
-        return sb.toString();
     }
 
     private static boolean validUsername(String username) {
