@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scacchi — chess.cristianrenosto.party</title>
+    <meta name="description" content="Partite di scacchi FIDE in tempo reale, via WebSocket." />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Salta al contenuto</a>
+
+    <header class="topbar">
+      <div class="wrap topbar-in">
+        <h1 class="brand">Scacchi</h1>
+        <div class="status" id="status" role="status" aria-live="polite">
+          <span class="dot" data-state="idle" aria-hidden="true"></span>
+          <span id="status-text">Non connesso</span>
+        </div>
+        <button id="theme" class="ghost" type="button" aria-label="Cambia tema">
+          Tema
+        </button>
+      </div>
+    </header>
+
+    <main id="main" class="wrap">
+      <!-- Fase 1: accesso -->
+      <section id="panel-auth" class="panel" aria-labelledby="h-auth">
+        <h2 id="h-auth">Accedi</h2>
+        <p class="muted">
+          La connessione è cifrata e autenticata con una firma: la password non
+          attraversa il browser oltre HTTPS e non viene salvata.
+        </p>
+
+        <form id="form-auth" autocomplete="off" novalidate>
+          <label class="field">
+            <span>Password</span>
+            <input
+              id="password"
+              type="password"
+              name="password"
+              autocomplete="current-password"
+              required
+              aria-describedby="err-auth"
+            />
+          </label>
+          <p id="err-auth" class="err" role="alert" hidden></p>
+          <div class="row">
+            <button type="submit" class="primary">Accedi</button>
+            <button type="button" class="ghost" id="btn-register">
+              Crea account
+            </button>
+          </div>
+        </form>
+
+        <details class="key-help">
+          <summary>Come funziona l'accesso</summary>
+          <p>
+            Il server invia una <em>sfida</em>: una stringa casuale. Il browser
+            la firma con la tua chiave privata e manda la firma, non la
+            password. Il server verifica con la chiave pubblica. La sfida vale
+            una volta sola, quindi una firma intercettata non è riutilizzabile.
+          </p>
+        </details>
+      </section>
+
+      <!-- Fase 2: lobby -->
+      <section id="panel-lobby" class="panel" hidden aria-labelledby="h-lobby">
+        <h2 id="h-lobby">Lobby</h2>
+        <div class="row">
+          <button type="button" class="primary" id="btn-list">Aggiorna stanze</button>
+          <button type="button" class="ghost" id="btn-disconnect">Disconnetti</button>
+        </div>
+        <table class="grid" id="rooms">
+          <caption class="sr-only">Stanze disponibili</caption>
+          <thead>
+            <tr><th scope="col">Stanza</th><th scope="col">Giocatori</th><th scope="col"></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <!-- Fase 3: partita -->
+      <section id="panel-game" class="panel" hidden aria-labelledby="h-game">
+        <h2 id="h-game">Partita</h2>
+        <div class="board-wrap">
+          <div
+            id="board"
+            class="board"
+            role="img"
+            aria-label="Scacchiera, aggiornata a ogni mossa"
+          ></div>
+        </div>
+        <dl class="moves">
+          <dt>Mossa</dt><dd id="moves">—</dd>
+          <dt>Stato</dt><dd id="game-status">in attesa</dd>
+        </dl>
+        <ol id="log" class="log" aria-live="polite" aria-label="Registro eventi"></ol>
+      </section>
+    </main>
+
+    <footer class="wrap foot">
+      <p class="muted">
+        Regole FIDE · <span id="conn-info">—</span>
+      </p>
+    </footer>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
