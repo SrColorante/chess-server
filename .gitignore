@@ -4,4 +4,18 @@ repair_prompt.txt
 worker_prompt.txt
 .neon
 .env.local
+
+# Client Neon usato solo in locale per il link al progetto.
+# package-lock.json resta tracciato: e' il lockfile, non un artefatto.
 node_modules/
+
+# Skill docs di Neon: documentazione dell'agente, non sorgente del server.
+.agents/
+skills-lock.json
+
+# Log e PID runtime: non hanno senso in un repository.
+server.log
+server.pid
+gui-error.log
+*.log
+*.pid
