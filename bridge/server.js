@@ -52,19 +52,22 @@ const SESSION_MAX_MS = 6 * 60 * 60 * 1000;
 const nonces = new NonceStore({ ttlMs: 60_000 });
 const stats = { connections: 0, rejected: 0, authFailures: 0 };
 
-/** Divisore per il buffer: 5 righe e il client e' lento, si chiude. */
-const MAX_BUFFERED_LINES = 5;
-
 function log(...args) {
   const ts = new Date().toISOString().slice(11, 19);
   console.log(`[${ts}]`, ...args);
 }
 
 /**
- * WebSocket -> socket TCP. Ogni messaggio in arrivo e' una riga; ogni riga che
- * arriva dal server viene inoltrata come messaggio. Nessun framing testo: il
- * protocollo e' gia' a righe e raddoppiare l'encoding aggiungerebbe solo punti
- * in cui i due lati possono disaccordarsi.
+ * Sessione autenticata: WebSocket <-> socket TCP.
+ *
+ * La chiama {@link handleConnection} quando la firma regge. Da quel momento
+ * questo modulo possiede la connessione: ogni messaggio in arrivo e' una riga,
+ * ogni riga che arriva dal server viene inoltrata come messaggio. Nessun framing
+ * testo: il protocollo e' gia' a righe e raddoppiare l'encoding aggiungerebbe
+ * solo punti in cui i due lati possono disaccordarsi.
+ *
+ * Tetto di vita e di inattività stanno qui perche' questo è l'unico punto che
+ * sa se una sessione è davvero finita o solo silenziosa.
  */
 function bridgeSession(ws, username) {
   const socket = connect({ host: CHESS_HOST, port: CHESS_PORT });
@@ -225,17 +228,22 @@ http.on("upgrade", (req, socket, head) => {
  * Macchina a due stati. Il client non puo' saltare il primo scambio: le righe
  * successive le interpreta il server TCP, ed è lui che decide se sono un
  * LOGIN legittimo.
+ *
+ * La socket verso il server TCP si apre **dopo** la firma, non prima. Prima di
+ * allora il bridge non sa ancora chi è dall'altra parte, e chiunque — anche chi
+ * verrà respinto — riuscirebbe a fargli aprire una connessione verso il
+ * servizio interno.
+ *
+ * Quando la firma regge, il lavoro passa a {@link bridgeSession}, che possiede
+ * la sessione da lì in poi: questo handler smette di ascoltare, altrimenti ogni
+ * riga di protocollo verrebbe interpretata due volte.
  */
 function handleConnection(ws) {
-  let phase = "challenge";
-  let username = null;
-  let pendingLines = 0;
-  const queued = [];
-  const upstream = connect({ host: CHESS_HOST, port: CHESS_PORT });
-  upstream.setNoDelay(true);
+  let listening = true;
 
-  let buffer = "";
   const reject = (reason) => {
+    if (!listening) return;
+    listening = false;
     stats.rejected++;
     log(`rifiutato: ${reason}`);
     try {
@@ -243,104 +251,60 @@ function handleConnection(ws) {
     } catch {
       /* noop */
     }
-    upstream.destroy();
   };
 
-  const release = () => {
-    // Le righe che il server TCP ha mandato durante l'handshake (per esempio
-    // WELCOME:) vanno al client: il suo protocollo aspetta di riceverle.
-    for (const line of queued.splice(0)) ws.send(line);
-  };
-
-  upstream.on("connect", () => {
-    ws.send(
-      JSON.stringify({
-        type: "challenge",
-        nonce: nonces.issue(),
-        algorithm: "ES256-challenge-v1",
-        expiresInMs: 60_000,
-      }),
-    );
-  });
-
-  upstream.on("data", (chunk) => {
-    buffer += chunk.toString("utf8");
-    let nl;
-    while ((nl = buffer.indexOf("\n")) !== -1) {
-      const line = buffer.slice(0, nl);
-      buffer = buffer.slice(nl + 1);
-      if (phase === "ready") {
-        ws.send(line);
-      } else {
-        pendingLines++;
-        if (pendingLines > MAX_BUFFERED_LINES) {
-          reject("upstream spoke before authentication");
-          return;
-        }
-        queued.push(line);
-      }
-    }
-  });
-
-  upstream.on("error", (err) => {
-    log(`impossibile raggiungere ${CHESS_HOST}:${CHESS_PORT}: ${err.message}`);
-    reject("chess server unreachable");
-  });
-
-  upstream.on("close", () => {
-    try {
-      ws.close(1011, "chess server closed");
-    } catch {
-      /* noop */
-    }
-  });
-
-  ws.on("message", (data, isBinary) => {
+  // Registrato prima di mandare la sfida: un frame che arriva durante
+  // l'handshake non deve trovare nessuno in ascolto.
+  ws.on("message", function onChallenge(data, isBinary) {
     if (isBinary) {
       reject("binary frames not allowed");
       return;
     }
 
-    if (phase === "challenge") {
-      let msg;
-      try {
-        msg = JSON.parse(data.toString("utf8"));
-      } catch {
-        reject("expected a JSON auth frame");
-        return;
-      }
-      try {
-        assertUserAllowed(msg.username);
-        if (!nonces.consume(msg.nonce)) {
-          // Nonce gia' usato o scaduto: replay, o semplicemente una sfida vecchia.
-          throw new AuthError("nonce non valido o gia' usato");
-        }
-        if (!verifySignature(msg)) {
-          stats.authFailures++;
-          throw new AuthError("firma non valida");
-        }
-      } catch (err) {
-        reject(err instanceof AuthError ? err.reason : "auth failed");
-        return;
-      }
-      username = msg.username;
-      phase = "ready";
-      release();
-      log(`autenticato ${safeLogUser(username)}, inoltro al server scacchi`);
+    let msg;
+    try {
+      msg = JSON.parse(data.toString("utf8"));
+    } catch {
+      reject("expected a JSON auth frame");
       return;
     }
 
-    // Fase ready: le righe sono comandi del protocollo, con reinvio a capo.
-    const line = data.toString("utf8").replace(/\r?\n$/, "");
-    if (line.length > MAX_LINE_BYTES) {
-      reject("line too long");
+    try {
+      assertUserAllowed(msg.username);
+      if (!nonces.consume(msg.nonce)) {
+        // Nonce gia' usato o scaduto: replay, o semplicemente una sfida vecchia.
+        throw new AuthError("nonce non valido o gia' usato");
+      }
+      if (!verifySignature(msg)) {
+        stats.authFailures++;
+        throw new AuthError("firma non valida");
+      }
+    } catch (err) {
+      reject(err instanceof AuthError ? err.reason : "auth failed");
       return;
     }
-    upstream.write(line + "\n");
+
+    const username = msg.username;
+    listening = false;
+    log(`autenticato ${safeLogUser(username)}, inoltro al server scacchi`);
+    ws.off("message", onChallenge);
+    bridgeSession(ws, username);
   });
 
-  ws.on("close", () => upstream.destroy());
-  ws.on("error", () => upstream.destroy());
+  ws.on("close", () => {
+    listening = false;
+  });
+
+  // Il ws è già aperto: handleUpgrade chiama questo callback dopo avere emesso
+  // 'open', quindi un listener su 'open' qui non scatterebbe mai.
+  ws.send(
+    JSON.stringify({
+      type: "challenge",
+      nonce: nonces.issue(),
+      algorithm: "ES256-challenge-v1",
+      expiresInMs: 60_000,
+    }),
+  );
 }
 
 http.listen(BRIDGE_PORT, BRIDGE_HOST, () => {

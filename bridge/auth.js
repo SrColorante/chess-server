@@ -13,7 +13,7 @@
  * e il nonce impedisce il replay di una risposta catturata.
  */
 
-import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
+import { createPublicKey, randomBytes, verify } from "node:crypto";
 
 /** Username ammesso: lo stesso dominio di vincolo del DB, piu' il prefisso. */
 const USERNAME_RE = /^[a-z0-9_.-]{1,24}$/i;
@@ -82,10 +82,6 @@ export class NonceStore {
  */
 export function buildChallenge(username, nonce) {
   return `chess-challenge-v1|${username}|${nonce}`;
-}
-
-export function challengeDigest(challenge) {
-  return createHash("sha256").update(challenge, "utf8").digest("base64url");
 }
 
 /**
