@@ -65,12 +65,24 @@ La UI è servita dallo stesso processo: `http://127.0.0.1:8081/` in locale,
 ## Test
 
 ```bash
-node test-bridge.js
+node test-protocol.js   # la grammatica del protocollo della UI, senza rete
+node test-bridge.js     # 21 verifiche end-to-end contro un finto server
 ```
 
-11 verifiche end-to-end contro un finto server che parla il protocollo reale:
-percorso completo, replay del nonce, utente non autorizzato, chiave pubblica
-non corrispondente, auth in chiaro, endpoint sbagliato, health.
+`test-protocol.js` copre il parsing di `BOARD:`, `ROOMS_LIST:`, `ROOM_CREATED:`
+e `MOVE_OK:` (`web/protocol.js`), con i valori attesi copiati da
+`renderBoardCompact()` e dal costruttore di `ROOMS_LIST` in `ServerMain`.
+
+`test-bridge.js` copre il percorso completo contro un finto server che parla il
+**protocollo reale**: sfida firmata, replay del nonce, utente non autorizzato,
+chiave pubblica non corrispondente, auth in chiaro, endpoint sbagliato, health,
+e una partita intera (CREATE_ROOM → JOIN_ROOM → MATCH_START → BOARD → MOVE_OK).
+
+La UI web si può provare senza browser:
+
+```bash
+node --import ./web/__ui_stub.mjs web/__ui_check.mjs
+```
 
 ## Configurare il client
 
@@ -95,3 +107,10 @@ forma del codice.
   stanza se ne conosce l'id. Va aggiunto quando le stanze diventano private.
 - **Le partite non sono persistenti dal lato bridge.** `chess_games` esiste nello
   schema ma non è ancora collegata: le partite si perdono al riavvio.
+- **La UI non gestisce le stanze private.** `CREATE_ROOM:nome:true` funziona (il
+  server marca la stanza privata e la esclude da `ROOMS_LIST`), ma la UI non ha
+  ancora un modo di passare il flag: chi crea una stanza privata la condivide
+  solo a voce. La lista non le mostra per costruzione.
+- **La firma nel browser è solo per sviluppo.** Con `publicKey` e `privateKey`
+  vuote in `web/app.js` la sfida non può essere risolta: i due campi vanno
+  riempiti in locale, o sostituiti da un endpoint di sessione in produzione.

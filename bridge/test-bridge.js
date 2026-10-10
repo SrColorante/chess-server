@@ -20,7 +20,45 @@ const BRIDGE_PORT = 18081;
 
 const upstreamLines = [];
 
+/**
+ * Quante socket TCP il bridge ha aperto verso il server scacchi. Una
+ * connessione rifiutata deve lasciare questo contatore a zero: prima della
+ * firma il bridge non sa ancora chi ha dall'altra parte, quindi non deve
+ * allocare nulla verso il servizio interno.
+ */
+let upstreamConnections = 0;
+
+/**
+ * Finto server scacchi che parla il protocollo REALE di ServerMain /
+ * ConnectionHandler (docs.md §4.2-4.3). Non una semplificazione: se il finto
+ * server inventasse una grammatica propria, il bridge passerebbe i test e la UI
+ * restrebbe muta, perche' nessuna delle due parti avrebbe mai incontrato il
+ * formato vero.
+ */
+const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function newRoomCode() {
+  let code = "";
+  for (let i = 0; i < 6; i++) {
+    code += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
+  }
+  return code;
+}
+
+const START_BOARD =
+  "BOARD:rnbqkbnr/pppppppp/......../......../......../......../PPPPPPPP/RNBQKBNRw";
+
+/** code -> { name, sockets: Set } */
+const rooms = new Map();
+
+function broadcast(code, message) {
+  const room = rooms.get(code);
+  if (!room) return;
+  for (const s of room.sockets) s.write(message + "\n");
+}
+
 const fakeChess = createServer((socket) => {
+  upstreamConnections++;
   let buffer = "";
   socket.write("WELCOME:TestChess\n");
   socket.on("data", (chunk) => {
@@ -30,14 +68,58 @@ const fakeChess = createServer((socket) => {
       const line = buffer.slice(0, nl);
       buffer = buffer.slice(nl + 1);
       upstreamLines.push(line);
+
       if (line.startsWith("LOGIN:")) {
-        socket.write("AUTH_OK:Logged in as test\nLOBBY:rooms=1\n");
-      } else if (line.startsWith("LIST_ROOMS")) {
-        socket.write("ROOMS:room1\n");
-      } else if (line.startsWith("PING")) {
+        const user = line.split(":")[1];
+        socket.write("AUTH_OK:Logged in as " + user + "\n");
+      } else if (line.startsWith("REGISTER:")) {
+        const user = line.split(":")[1];
+        socket.write("AUTH_OK:Account created and logged in as " + user + "\n");
+      } else if (line.startsWith("GUEST:")) {
+        socket.write("AUTH_OK:Joined as guest " + line.slice(6) + "\n");
+      } else if ("LIST_ROOMS" === line) {
+        // ROOMS_LIST:<n>;<codice>|<nome>|<host>;… — una riga sola, come la
+        // costruisce ServerMain (conteggio davanti, `;` fra le voci, `|` nei campi).
+        const open = [...rooms.entries()].filter(([, r]) => r.sockets.size === 1);
+        let out = "ROOMS_LIST:" + open.length;
+        for (const [code, room] of open) {
+          out += ";" + code + "|" + room.name + "|" + room.host;
+        }
+        socket.write(out + "\n");
+      } else if (line.startsWith("CREATE_ROOM:")) {
+        const code = newRoomCode();
+        rooms.set(code, { name: line.slice(12), host: "ospite", sockets: new Set([socket]) });
+        socket.write("ROOM_CREATED:" + line.slice(12) + ":" + code + ":false\n");
+        socket.write("INFO:Waiting for opponent to join room code: " + code + "\n");
+      } else if (line.startsWith("JOIN_ROOM:")) {
+        const code = line.slice(10).trim().toUpperCase();
+        const room = rooms.get(code);
+        if (!room) {
+          socket.write("JOIN_ERROR:Room not found\n");
+        } else if (room.sockets.has(socket)) {
+          socket.write("JOIN_ERROR:Room is already full or finished\n");
+        } else {
+          room.sockets.add(socket);
+          socket.write("JOIN_OK:Joined room " + room.name + "\n");
+          broadcast(code, "MATCH_START:Room " + room.name + " starting!");
+          broadcast(code, "ASSIGNED_COLOR:WHITE");
+          broadcast(code, START_BOARD);
+        }
+      } else if (line.startsWith("MOVE:")) {
+        const parts = line.split(":");
+        if (parts.length !== 3 || !/^[a-h][1-8]$/.test(parts[1]) || !/^[a-h][1-8]$/.test(parts[2])) {
+          socket.write("MOVE_ERROR:Malformed move\n");
+        } else {
+          const code = [...rooms.entries()].find(([, r]) => r.sockets.has(socket))?.[0];
+          broadcast(code, "MOVE_OK:Host moved " + parts[1] + " -> " + parts[2]);
+          broadcast(code, START_BOARD);
+        }
+      } else if ("PING" === line) {
         socket.write("PONG\n");
+      } else if (line.startsWith("PONG")) {
+        // Il client risponde al keepalive del server: non va rimandato indietro.
       } else {
-        socket.write("ERR:unknown command\n");
+        socket.write("ERROR:Unknown command\n");
       }
     }
   });
@@ -93,7 +175,7 @@ function session(privateKey, { username, publicKey, mutate, onLine, timeoutMs = 
           }
           return;
         }
-        // Righe di protocollo: WELCOME:, AUTH_OK:, LOBBY:, ROOMS:, PONG:
+        // Righe di protocollo: WELCOME:, AUTH_OK:, ROOMS_LIST:, PONG:
         if (onLine) onLine(text, ws, lines);
       });
     });
@@ -124,9 +206,9 @@ async function main() {
         // Un solo LOGIN: il client aspetta WELCOME, non risponde a ogni riga.
         if (text.startsWith("WELCOME:")) {
           ws.send("LOGIN:cristianrenosto:segreta");
-        } else if (text.startsWith("AUTH_OK") && !lines.some((l) => l.startsWith("ROOMS"))) {
+        } else if (text.startsWith("AUTH_OK") && !lines.some((l) => l.startsWith("ROOMS_LIST"))) {
           ws.send("LIST_ROOMS");
-        } else if (text.startsWith("ROOMS:") && !lines.some((l) => l === "PONG")) {
+        } else if (text.startsWith("ROOMS_LIST:") && !lines.some((l) => l === "PONG")) {
           ws.send("PING");
         }
       },
@@ -254,7 +336,117 @@ async function main() {
     check("healthz risponde", health.status === 200 && body.ok === true, JSON.stringify(body));
   }
 
-  fakeChess.close();
+  // 8. Nessuna socket verso il server scacchi prima della firma. Le sessioni
+  //    rifiutate sopra non devono aver aperto nulla: se il bridge aprisse la
+  //    connessione durante l'handshake, chiunque — anche respinto — potrebbe
+  //    fargli consumare una socket verso il servizio interno.
+  {
+    const prima = upstreamConnections;
+    await session(privateKey, {
+      username: "intruso",
+      publicKey: pub,
+      timeoutMs: 2000,
+    });
+    check(
+      "nessuna socket verso il server prima dell'autenticazione",
+      upstreamConnections === prima,
+      "connessioni upstream: " + prima + " -> " + upstreamConnections,
+    );
+  }
+
+  // 9. Percorso completo di una partita attraverso il bridge: CREATE_ROOM,
+  //    JOIN_ROOM, MATCH_START, ASSIGNED_COLOR, BOARD, MOVE_OK, BOARD. Due
+  //    sessioni vere: la prima crea, la seconda entra con il codice che la
+  //    prima ha ricevuto. Verifica il ponte, non la firma, ed è il percorso che
+  //    la UI web percorre davvero.
+  {
+    // Il codice serve solo per leggere il log finale: l'ospite non lo usa, lo
+    // legge da ROOMS_LIST esattamente come fa la UI web.
+    const condiviso = { code: null };
+    let guestPolls = 0;
+
+    const host = session(privateKey, {
+      username: "cristianrenosto",
+      publicKey: pub,
+      timeoutMs: 6000,
+      onLine: (text, ws) => {
+        if (text.startsWith("WELCOME:")) {
+          ws.send("LOGIN:cristianrenosto:segreta");
+        } else if (text.startsWith("AUTH_OK")) {
+          ws.send("CREATE_ROOM:Partita Web");
+        } else if (text.startsWith("ROOM_CREATED:")) {
+          condiviso.code = text.split(":")[2];
+        } else if (text.startsWith("MATCH_START:")) {
+          ws.send("MOVE:e2:e4");
+        }
+      },
+    });
+
+    // Se la stanza non c'è ancora (il server risponde in ordine, e in quel
+    // momento l'ospite ha già chiesto la lista) la richiede di nuovo, con una
+    // pausa per non trasformare il test in un ciclo saturo.
+    const guest = session(privateKey, {
+      username: "cristianrenosto",
+      publicKey: pub,
+      timeoutMs: 6000,
+      onLine: (text, ws) => {
+        if (text.startsWith("WELCOME:")) {
+          ws.send("GUEST:ospite");
+        } else if (text.startsWith("AUTH_OK")) {
+          ws.send("LIST_ROOMS");
+        } else if (text.startsWith("ROOMS_LIST:")) {
+          const first = text
+            .slice("ROOMS_LIST:".length)
+            .split(";")
+            .slice(1)
+            .filter(Boolean)[0];
+          const code = first && first.split("|")[0];
+          if (code) {
+            ws.send("JOIN_ROOM:" + code);
+          } else if (guestPolls++ < 20) {
+            setTimeout(() => ws.send("LIST_ROOMS"), 100);
+          }
+        }
+      },
+    });
+
+    const [h, g] = await Promise.all([host, guest]);
+    const hostLines = h.lines;
+    const guestLines = g.lines;
+
+    const boardLine = (lines) => lines.find((l) => l.startsWith("BOARD:"));
+    check("ROOM_CREATED attraversa il bridge", hostLines.some((l) => /^ROOM_CREATED:.+:[A-Z2-9]{6}:false$/.test(l)));
+    check("JOIN_ROOM inoltrato", upstreamLines.some((l) => l.startsWith("JOIN_ROOM:")));
+    check("MATCH_START consegnato a entrambi", hostLines.some((l) => l.startsWith("MATCH_START:")) && guestLines.some((l) => l.startsWith("MATCH_START:")));
+    check("ASSIGNED_COLOR consegnato", hostLines.some((l) => l.startsWith("ASSIGNED_COLOR:")));
+    check(
+      "BOARD in forma compatta (78 caratteri)",
+      hostLines.some((l) => /^BOARD:[rnbqkpRNBQKP.\/]{71}[wb]$/.test(l)),
+      boardLine(hostLines) ? "len=" + boardLine(hostLines).length : "nessun BOARD",
+    );
+    check("MOVE inoltrato", upstreamLines.includes("MOVE:e2:e4"));
+    check("MOVE_OK torna al client", hostLines.some((l) => l.startsWith("MOVE_OK:")));
+    check("la scacchiera aggiornata torna al client", hostLines.filter((l) => l.startsWith("BOARD:")).length >= 2);
+  }
+
+  // 10. Server scacchi spento: la sessione autenticata si chiude invece di
+  //     lasciare una WebSocket aperta su una partita che non esiste piu'.
+  //     Chiudere il finto server lascia la porta 16700 senza nessuno in
+  //     ascolto, quindi la connect() del bridge ottiene ECONNREFUSED.
+  {
+    await new Promise((r) => fakeChess.close(r));
+    const r = await session(privateKey, {
+      username: "cristianrenosto",
+      publicKey: pub,
+      timeoutMs: 2500,
+    });
+    check(
+      "server scacchi irraggiungibile chiude la sessione",
+      r.code === 1000 && /upstream/i.test(r.reason),
+      "code=" + r.code + " reason=" + r.reason,
+    );
+  }
+
   const failed = results.filter((r) => !r.pass);
   console.log(`\n${results.length - failed.length}/${results.length} verifiche superate`);
   process.exit(failed.length === 0 ? 0 : 1);

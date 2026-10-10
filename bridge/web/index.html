@@ -72,10 +72,32 @@
           <button type="button" class="primary" id="btn-list">Aggiorna stanze</button>
           <button type="button" class="ghost" id="btn-disconnect">Disconnetti</button>
         </div>
+
+        <form id="form-create" class="row">
+          <label class="field">
+            <span>Nome stanza</span>
+            <input id="room-name" type="text" name="room-name" maxlength="32" value="Partita web" />
+          </label>
+          <button type="submit" class="ghost">Crea stanza</button>
+        </form>
+
+        <form id="form-join" class="row">
+          <label class="field">
+            <span>Codice stanza</span>
+            <input id="room-code" type="text" name="room-code" maxlength="6" placeholder="ABC234" />
+          </label>
+          <button type="submit" class="ghost">Entra con il codice</button>
+        </form>
+
         <table class="grid" id="rooms">
           <caption class="sr-only">Stanze disponibili</caption>
           <thead>
-            <tr><th scope="col">Stanza</th><th scope="col">Giocatori</th><th scope="col"></th></tr>
+            <tr>
+              <th scope="col">Codice</th>
+              <th scope="col">Stanza</th>
+              <th scope="col">Host</th>
+              <th scope="col"></th>
+            </tr>
           </thead>
           <tbody></tbody>
         </table>
@@ -88,14 +110,18 @@
           <div
             id="board"
             class="board"
-            role="img"
-            aria-label="Scacchiera, aggiornata a ogni mossa"
+            role="group"
+            aria-label="Scacchiera: seleziona un pezzo e poi la casella di arrivo"
           ></div>
         </div>
         <dl class="moves">
-          <dt>Mossa</dt><dd id="moves">—</dd>
+          <dt>Colore</dt><dd id="my-color">—</dd>
+          <dt>Ultima mossa</dt><dd id="moves">—</dd>
           <dt>Stato</dt><dd id="game-status">in attesa</dd>
         </dl>
+        <div class="row">
+          <button type="button" class="ghost" id="btn-leave">Abbandona la partita</button>
+        </div>
         <ol id="log" class="log" aria-live="polite" aria-label="Registro eventi"></ol>
       </section>
     </main>

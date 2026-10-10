@@ -8,7 +8,9 @@
   "scripts": {
     "start": "node server.js",
     "check": "node --check server.js",
-    "test": "node test-bridge.js"
+    "test": "node test-protocol.js && node test-bridge.js",
+    "test:protocol": "node test-protocol.js",
+    "test:bridge": "node test-bridge.js"
   },
   "engines": {
     "node": ">=22"
